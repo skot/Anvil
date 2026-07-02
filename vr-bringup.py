@@ -6,7 +6,7 @@ import tps546D24_values
 # Configure the serial ports
 try:
     serial_port_ctrl = serial.Serial(
-        port='/dev/tty.usbmodemb310cc521',  # Update this to your control serial port. usually it's the first one
+        port='/dev/cu.usbmodem90ea13d31',  # Update this to your control serial port. usually it's the first one
         baudrate=115200,
         timeout=1
     )
@@ -16,13 +16,13 @@ except serial.SerialException as e:
 
 try:
     serial_port_asic = serial.Serial(
-        port='/dev/tty.usbmodemb310cc523',  # Update this to your ASIC serial port. usually it's the second one
-        baudrate=5000000,
+        port='/dev/cu.usbmodem90ea13d33',  # Update this to your ASIC serial port. usually it's the second one
+        baudrate=115200,
         timeout=2
     )
 
 except serial.SerialException as e:
-    print(f"Error opening Control serial port: {e}")
+    print(f"Error opening ASIC serial port: {e}")
     exit(1)
 
 def prettyHex(data):
@@ -33,7 +33,7 @@ def prettyHex(data):
 # TPS546D24.read_current_settings(serial_port_ctrl)
 # TPS546D24.read_manf_settings(serial_port_ctrl)
 
-TPS546D24.Init(serial_port_ctrl, tps546D24_values.TPS546_CONFIG_BIRDS)
+TPS546D24.Init(serial_port_ctrl, tps546D24_values.TPS546_CONFIG_PROTO)
 
 TPS546D24.init_disable(serial_port_ctrl)
 
@@ -44,7 +44,7 @@ TPS546D24.clear_faults(serial_port_ctrl)
 
 TPS546D24.TPS546_status(serial_port_ctrl)
 
-TPS546D24.write_settings(serial_port_ctrl, tps546D24_values.TPS546_CONFIG_BIRDS)
+TPS546D24.write_settings(serial_port_ctrl, tps546D24_values.TPS546_CONFIG_PROTO)
 
 TPS546D24.TPS546_status(serial_port_ctrl)
 
