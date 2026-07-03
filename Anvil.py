@@ -44,7 +44,8 @@ class Anvil:
             print("  1) Reconnect serial ports")
             print("  2) TPS546 voltage regulator")
             print("  3) Proto MC3 ASICs")
-            print("  4) List serial ports")
+            print("  4) Fan")
+            print("  5) List serial ports")
             print("  q) Quit")
             choice = input("> ").strip().lower()
 
@@ -55,6 +56,8 @@ class Anvil:
             elif choice == "3":
                 self.asic_menu()
             elif choice == "4":
+                self.fan_menu()
+            elif choice == "5":
                 self.list_serial_ports()
             elif choice in ("q", "quit", "exit"):
                 self.shutdown()
@@ -304,6 +307,70 @@ class Anvil:
         asic.flush()
         print(f"Wrote {bytes_written} byte(s) to ASIC serial.")
 
+    def fan_menu(self):
+        while True:
+            print("")
+            print("Fan")
+            print("  1) Set fan duty percent")
+            print("  2) Set raw fan duty")
+            print("  3) Read RPM")
+            print("  4) Poll RPM")
+            print("  b) Back")
+            choice = input("Fan> ").strip().lower()
+
+            if choice == "1":
+                self.fan_set_percent()
+            elif choice == "2":
+                self.fan_set_raw_duty()
+            elif choice == "3":
+                self.fan_read_rpm()
+            elif choice == "4":
+                self.fan_poll_rpm()
+            elif choice in ("b", "back", "q"):
+                return
+            else:
+                print("Unknown option")
+
+    def fan_set_percent(self):
+        ser = self.require_control()
+        if not ser:
+            return
+
+        percent = prompt_int("Fan duty percent", default=50, minimum=0, maximum=100)
+        duty = round(percent * 255 / 100)
+        print(f"Setting fan duty to {percent}% ({duty}/255)...")
+        bitaxeraw.fan_set_duty(ser, 0xAC, duty, debug=self.debug)
+
+    def fan_set_raw_duty(self):
+        ser = self.require_control()
+        if not ser:
+            return
+
+        duty = prompt_int("Fan raw duty", default=128, minimum=0, maximum=255)
+        print(f"Setting fan duty to {duty}/255...")
+        bitaxeraw.fan_set_duty(ser, 0xAC, duty, debug=self.debug)
+
+    def fan_read_rpm(self):
+        ser = self.require_control()
+        if not ser:
+            return None
+
+        rpm = bitaxeraw.get_fan_rpm(ser, 0xAD, debug=self.debug)
+        if rpm is not None:
+            print(f"Fan RPM: {rpm}")
+        return rpm
+
+    def fan_poll_rpm(self):
+        interval = prompt_float("Poll interval seconds", default=2.0, minimum=1.0)
+        print("Polling fan RPM. Press Ctrl-C to stop.")
+        try:
+            while True:
+                self.fan_read_rpm()
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("")
+            print("Stopped polling.")
+
     def list_serial_ports(self):
         port_info = serial_port_info()
         ports = sorted(port_info) if port_info else sorted(
@@ -378,6 +445,25 @@ def prompt_float(prompt, default, minimum=None):
             continue
         if minimum is not None and value < minimum:
             print(f"Enter a value >= {minimum}.")
+            continue
+        return value
+
+
+def prompt_int(prompt, default, minimum=None, maximum=None):
+    while True:
+        response = input(f"{prompt} [{default}]: ").strip()
+        if not response:
+            return default
+        try:
+            value = int(response, 0)
+        except ValueError:
+            print("Enter a decimal or 0x-prefixed hex value.")
+            continue
+        if minimum is not None and value < minimum:
+            print(f"Enter a value >= {minimum}.")
+            continue
+        if maximum is not None and value > maximum:
+            print(f"Enter a value <= {maximum}.")
             continue
         return value
 

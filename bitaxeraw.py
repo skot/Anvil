@@ -4,7 +4,7 @@ import time
 PAGE_I2C = 0x05
 PAGE_GPIO = 0x06
 PAGE_ADC = 0x07
-PAGE_FAN = 0x09
+PAGE_FAN = 0x08
 
 GPIO_HIGH = 0x01
 GPIO_LOW = 0x00
@@ -18,8 +18,8 @@ ADC_DOMAIN1 = 0x50
 ADC_DOMAIN2 = 0x51
 ADC_DOMAIN3 = 0x52
 
-FAN_SPEED_CMD = 0x10
-FAN_TACH_CMD = 0x20
+FAN_SET_DUTY_CMD = 0x00
+FAN_READ_RPM_CMD = 0x01
 
 def prettyHex(data):
     return ' '.join(f'{byte:02X}' for byte in data)
@@ -46,12 +46,12 @@ def prettyHex9(data):
             result.append(f'{value:03X}')
     return ' '.join(result)
 
-def fan_set_speed(ser, id, speed_percent, debug=False):
+def fan_set_duty(ser, id, duty, debug=False):
+    duty = max(0, min(255, int(duty)))
     packet_len = 7
-    packet = bytes([packet_len, 0x00, id, 0x00, PAGE_FAN, FAN_SPEED_CMD, speed_percent])
+    packet = bytes([packet_len, 0x00, id, 0x00, PAGE_FAN, FAN_SET_DUTY_CMD, duty])
 
-    if debug:
-        print("ctrl fan tx: [%s]" % prettyHex(packet))
+    print("ctrl fan tx: [%s]" % prettyHex(packet))
 
     ser.write(packet)
 
@@ -61,6 +61,8 @@ def fan_set_speed(ser, id, speed_percent, debug=False):
         bytes_read = len(rxdata)
         if bytes_read > 0:
             if debug:
+                print("ctrl fan rx: [%s]" % prettyHex(rxdata))
+            else:
                 print("ctrl fan rx: [%s]" % prettyHex(rxdata))
             if rxdata[2] != id:
                 print("Error: ID mismatch. Expected %02X, got %02X" % (id, rxdata[2]))
@@ -72,29 +74,34 @@ def fan_set_speed(ser, id, speed_percent, debug=False):
         print("No data received")
     return
 
+def fan_set_speed(ser, id, speed_percent, debug=False):
+    duty = round(max(0, min(100, int(speed_percent))) * 255 / 100)
+    return fan_set_duty(ser, id, duty, debug=debug)
+
 def get_fan_rpm(ser, id, debug=False):
     packet_len = 6
-    packet = bytes([packet_len, 0x00, id, 0x00, PAGE_FAN, FAN_TACH_CMD])
+    packet = bytes([packet_len, 0x00, id, 0x00, PAGE_FAN, FAN_READ_RPM_CMD])
 
-    if debug:
-        print("ctrl fan rpm tx: [%s]" % prettyHex(packet))
+    print("ctrl fan rpm tx: [%s]" % prettyHex(packet))
 
     ser.write(packet)
 
     # wait for the response
-    rxdata = ser.read(5)
+    rxdata = ser.read(7)
     if rxdata:
         bytes_read = len(rxdata)
-        if bytes_read > 0:
+        if bytes_read >= 7:
             if debug:
+                print("ctrl fan rpm rx: [%s]" % prettyHex(rxdata))
+            else:
                 print("ctrl fan rpm rx: [%s]" % prettyHex(rxdata))
             if rxdata[2] != id:
                 print("Error: ID mismatch. Expected %02X, got %02X" % (id, rxdata[2]))
                 return
-            rpm = (rxdata[4] << 8) | rxdata[3]
+            rpm = int.from_bytes(rxdata[3:7], "little")
             return rpm
         else:
-            print("No data received")
+            print(f"Error: Expected 7 bytes, got {bytes_read}")
             return
     else:
         print("No data received")
