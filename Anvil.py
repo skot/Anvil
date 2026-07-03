@@ -6,6 +6,8 @@ import glob
 import sys
 import time
 
+import bitaxeraw
+import mc3
 import TPS546D24
 import tps546D24_values
 from pmbusconst import PMBUS_OPERATION
@@ -14,7 +16,7 @@ from pmbusconst import PMBUS_OPERATION
 DEFAULT_CTRL_PORT = "/dev/cu.usbmodem90ea13d31"
 DEFAULT_ASIC_PORT = "/dev/cu.usbmodem90ea13d33"
 DEFAULT_CTRL_BAUDRATE = 115200
-DEFAULT_ASIC_BAUDRATE = 5000000
+DEFAULT_ASIC_BAUDRATE = 115200
 
 
 class Anvil:
@@ -41,7 +43,8 @@ class Anvil:
             print("Main menu")
             print("  1) Reconnect serial ports")
             print("  2) TPS546 voltage regulator")
-            print("  3) List serial ports")
+            print("  3) Proto MC3 ASICs")
+            print("  4) List serial ports")
             print("  q) Quit")
             choice = input("> ").strip().lower()
 
@@ -50,6 +53,8 @@ class Anvil:
             elif choice == "2":
                 self.tps_menu()
             elif choice == "3":
+                self.asic_menu()
+            elif choice == "4":
                 self.list_serial_ports()
             elif choice in ("q", "quit", "exit"):
                 self.shutdown()
@@ -124,6 +129,12 @@ class Anvil:
             return self.ctrl
         print("Control serial is not connected yet.")
         return self.connect_control()
+
+    def require_asic(self):
+        if self.asic and self.asic.is_open:
+            return self.asic
+        print("ASIC serial is not connected yet.")
+        return self.connect_asic()
 
     def tps_menu(self):
         while True:
@@ -233,8 +244,69 @@ class Anvil:
             TPS546D24.clear_faults(ser)
             TPS546D24.TPS546_status(ser)
 
+    def asic_menu(self):
+        while True:
+            print("")
+            print("Proto MC3 ASICs")
+            print("  1) Enable VDDIO 5V")
+            print("  2) Disable VDDIO 5V")
+            print("  3) Enumerate MC3 chain")
+            print("  4) Raw ASIC UART TX test")
+            print("  b) Back")
+            choice = input("ASIC> ").strip().lower()
+
+            if choice == "1":
+                self.asic_vddio(True)
+            elif choice == "2":
+                self.asic_vddio(False)
+            elif choice == "3":
+                self.mc3_enumerate()
+            elif choice == "4":
+                self.asic_uart_tx_test()
+            elif choice in ("b", "back", "q"):
+                return
+            else:
+                print("Unknown option")
+
+    def asic_vddio(self, enabled):
+        ser = self.require_control()
+        if not ser:
+            return False
+
+        state = bitaxeraw.GPIO_HIGH if enabled else bitaxeraw.GPIO_LOW
+        label = "Enabling" if enabled else "Disabling"
+        print(f"{label} VDDIO 5V on GPIO21...")
+        bitaxeraw.gpio_set(ser, 0xAB, bitaxeraw.GPIO_VDDIO_5V_EN, state, debug=self.debug)
+        time.sleep(0.1)
+        return True
+
+    def mc3_enumerate(self):
+        ctrl = self.require_control()
+        asic = self.require_asic()
+        if not ctrl or not asic:
+            return
+
+        print("MC3 enumeration expects TPS core voltage on, VDDIO 5V on, and 25 MHz CLKI present.")
+        if not confirm("Run MC3 enumeration now?"):
+            return
+
+        mc3.enumerate_chain(ctrl, asic, debug=self.debug)
+
+    def asic_uart_tx_test(self):
+        asic = self.require_asic()
+        if not asic:
+            return
+
+        pattern = bytes([0x55, 0xAA, 0x00, 0xFF]) * 16
+        print(f"Sending raw ASIC UART test pattern on {asic.port} @ {asic.baudrate} baud...")
+        print(f"raw tx: [{bitaxeraw.prettyHex(pattern)}]")
+        bytes_written = asic.write(pattern)
+        asic.flush()
+        print(f"Wrote {bytes_written} byte(s) to ASIC serial.")
+
     def list_serial_ports(self):
-        ports = sorted(
+        port_info = serial_port_info()
+        ports = sorted(port_info) if port_info else sorted(
             glob.glob("/dev/cu.usb*")
             + glob.glob("/dev/tty.usb*")
             + glob.glob("/dev/cu.SLAB*")
@@ -250,7 +322,8 @@ class Anvil:
             if port == self.asic_port:
                 markers.append("ASIC")
             marker = f" ({', '.join(markers)})" if markers else ""
-            print(f"  {port}{marker}")
+            description = f" - {port_info[port]}" if port_info and port_info.get(port) else ""
+            print(f"  {port}{marker}{description}")
 
     def shutdown(self):
         if self.ctrl and self.ctrl.is_open:
@@ -279,6 +352,18 @@ def load_pyserial():
         return None
 
     return serial
+
+
+def serial_port_info():
+    try:
+        from serial.tools import list_ports
+    except Exception:
+        return {}
+
+    info = {}
+    for port in list_ports.comports():
+        info[port.device] = port.description
+    return info
 
 
 def prompt_float(prompt, default, minimum=None):

@@ -8,6 +8,7 @@ from tps546D24_values import *
 
 W_CMD_ID = 0xAA # arbitrary write command ID
 R_CMD_ID = 0xBB # arbitrary read command ID
+GPIO_TPS546_EN = 0x02
 
 DEVICE_ID1 = [0x54, 0x49, 0x54, 0x6D, 0x24, 0x41] # TPS546D24A
 DEVICE_ID2 = [0x54, 0x49, 0x54, 0x6D, 0x24, 0x62] # TPS546D24S
@@ -221,7 +222,7 @@ def enable_pin(ser, state, debug=False):
         value = 0x01  # Enable
     else:
         value = 0x00  # Disable
-    packet = bytes([7, 0x00, id, 0x00, 0x06, 0x00, value])
+    packet = bytes([7, 0x00, id, 0x00, 0x06, GPIO_TPS546_EN, value])
     if debug:
         print("ctrl gpio tx: [%s]" % prettyHex(packet))
 
