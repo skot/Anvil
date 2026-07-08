@@ -1,8 +1,7 @@
 # Anvil
 
-Anvil is an interactive Python bringup console for the bitaxeProto running
-`bitaxe-raw` firmware on the ESP32. It is the main tool in this folder for
-exercising board features during hardware bringup.
+Anvil is an interactive Python bringup console for bitaxe prototypes running
+`bitaxe-raw` firmware on the ESP32. This version of Anvil is for the bitaxeProto-1102x with four MC3 ASICs.
 
 ## Features
 
@@ -10,6 +9,8 @@ exercising board features during hardware bringup.
 - Configures, enables, disables, and monitors the TPS546D24S voltage regulator.
 - Controls Proto MC3 VDDIO 5V enable.
 - Enumerates the MC3 ASIC chain over the ULink UART interface.
+- Starts an MC3 version-rolling mining smoke test from the static app-note work vector.
+- Reads the MC3 version-rolling nonce buffer.
 - Sends raw ASIC UART test patterns for logic-analyzer debugging.
 - Sets fan PWM duty and reads/polls fan RPM.
 - Lists available serial ports to help identify the control and ASIC interfaces.
@@ -60,7 +61,7 @@ ASIC RX: ESP32 GPIO18
 
 MC3 ULink starts at 115200 baud.
 
-## Pin Mapping
+## bitaxeProto 1102x Pin Mapping
 
 ```text
 VDDIO 5V Enable | ESP32 GPIO21
@@ -82,6 +83,9 @@ Display SDA     | ESP32 GPIO7
 
 1. Start Anvil.
 2. Use `TPS546 voltage regulator` to initialize and turn on core voltage.
+   `Turn regulator ON` prompts for `VOUT_COMMAND` between the configured
+   `VOUT_MIN` and `VOUT_MAX` and prints the expected MC3 VDD as half of the
+   TPS546 output voltage.
 3. Use `Proto MC3 ASICs` to enable VDDIO 5V.
 4. Run `Enumerate MC3 chain`; a healthy four-chip chain reports:
 
@@ -89,4 +93,46 @@ Display SDA     | ESP32 GPIO7
 MC3 chain count: 4
 ```
 
-5. Use `Fan` to set PWM duty and verify tach/RPM.
+5. Run `Read MC3 voltage/temp` to configure the on-chip sensors and read each
+   addressed ASIC. The default sub-option is a compact rail summary with chip
+   temperature and `VDDIO12`, `VDDH`, `VDDI1`, `VDDI2`, `VDDI3`, and `VDD`.
+   `VDDIO12` and `VDD` are displayed after a 2x prescaler correction. Raw
+   channel scan and voltage matrix diagnostics remain available from the
+   sensor submenu.
+6. Run `Start app-note MC3 mining test` to write the static version-rolling
+   work vector from `local/MC3 Application Note - Mining Process.pdf`, or run
+   `Start app-note mining with distinct chip ranges` to assign each chip a
+   separate version range before broadcasting the work trigger. With the
+   default 16-bit version mask and four chips, the V_BASE values are
+   `0x20000000`, `0x20004000`, `0x20008000`, and `0x2000C000`.
+   This assumes TPS core voltage is on, VDDIO 5V is on, 25 MHz CLKI is present,
+   and the MC3 chain has already been enumerated with INIT.
+7. Run `Read MC3 nonce buffer(s)` to optionally issue `NONCE_UPDATE` and read
+   and validate the version-rolling nonce buffer for one chip or all chips in
+   the chain.
+8. Run the optional app-note mining smoke tests before integrating a full miner:
+   `Poll app-note mining health` repeatedly starts fresh app-note work with a
+   new note and validates all selected nonce buffers for a bounded duration,
+   `App-note work note rollover test`
+   confirms buffers follow new work notes, and `App-note target-rate sanity test`
+   compares returned nonce counts between an easy and harder work target and
+   prints an approximate hashrate when the nonce count is measurable.
+9. Use `Set/verify MC3 hash frequency` to read back `PLL0_CFG`, `PLL0_EN`
+   lock, and `ROLLTIME` for each chip. It skips PLL writes when the selected
+   chips already match, because live PLL writes have been observed to stop
+   hashing.
+10. Use `Cold-set MC3 hash frequency` immediately after ASIC reset/enumeration,
+    before mining or SPDLOG, to try the app-note startup PLL order:
+    `GLOBAL`, `PLL0_CFG`, `PLL0_EN`, then matching `ROLLTIME`.
+11. Use `MC3 SPD logger hashrate test` to run the documented speed logger,
+    read per-chip pass/fail counters from the confirmed `0x11000` SPDLOG base,
+    and report measured GH/s.
+12. Use `Fan` to set PWM duty and verify tach/RPM.
+
+## Tests
+
+Run the pure MC3 mining layout and fake-serial tests with:
+
+```bash
+python3 -m unittest discover -v
+```

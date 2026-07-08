@@ -759,6 +759,11 @@ def enable_regulator(ser):
     smb_write_byte(ser, PMBUS_OPERATION, OPERATION_ON)
 
 
+def set_vout_command(ser, vout, debug=False):
+    print(f"Setting VOUT_COMMAND: {vout:.3f}V")
+    smb_write_word(ser, PMBUS_VOUT_COMMAND, float_2_ulinear16(vout), debug=debug)
+
+
 def TPS546_status(ser):
     TPS_STATUS = {}
     # 1) Top-level

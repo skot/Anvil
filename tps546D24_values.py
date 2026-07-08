@@ -90,14 +90,14 @@ TPS546_CONFIG_PROTO = {
     "TELEMETRY_CONFIG": [0x03, 0x03, 0x03, 0x03, 0x03, 0x00],
     
     "VOUT_MODE": None,
-    "VOUT_COMMAND": 2.4, #ULINEAR16
+    "VOUT_COMMAND": 2.2, #ULINEAR16
     "VOUT_TRIM": 0x0000, 
-    "VOUT_MAX": 3.0, #ULINEAR16
+    "VOUT_MAX": 2.4, #ULINEAR16
     "VOUT_MARGIN_HIGH": 1.1, # %/100 above VOUT
     "VOUT_MARGIN_LOW": 0.90, # %/100 below VOUT
     "VOUT_TRANSITION_RATE": 0xE010,
     "VOUT_SCALE_LOOP": 0.125,
-    "VOUT_MIN": 2.0,
+    "VOUT_MIN": 1.92,
     
     "VIN_ON": 11.0,
     "VIN_OFF": 10.5,
