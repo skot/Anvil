@@ -119,11 +119,13 @@ MC3 chain count: 4
    prints an approximate hashrate when the nonce count is measurable.
 9. Use `Set/verify MC3 hash frequency` to read back `PLL0_CFG`, `PLL0_EN`
    lock, and `ROLLTIME` for each chip. It skips PLL writes when the selected
-   chips already match, because live PLL writes have been observed to stop
-   hashing.
+   chips already match. Forced writes use the errata PLL sequence:
+   disable PLL0, write `PLL0_CFG`, write `PLL0_EN=0x1`, write `PLL0_EN=0x3`,
+   then update `ROLLTIME`.
 10. Use `Cold-set MC3 hash frequency` immediately after ASIC reset/enumeration,
     before mining or SPDLOG, to try the app-note startup PLL order:
-    `GLOBAL`, `PLL0_CFG`, `PLL0_EN`, then matching `ROLLTIME`.
+    `GLOBAL`, optional `PLL0_CFG`, `PLL0_EN=0x1`, `PLL0_EN=0x3`, then matching
+    `ROLLTIME`.
 11. Use `MC3 SPD logger hashrate test` to run the documented speed logger,
     read per-chip pass/fail counters from the confirmed `0x11000` SPDLOG base,
     and report measured GH/s.

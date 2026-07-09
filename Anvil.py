@@ -788,7 +788,7 @@ class Anvil:
         )
         print(f"Expected ROLLTIME: 0x{rolltime:08X}")
         print(f"Theoretical rate: {expected_per_chip:.1f} GH/s per chip, {expected_total:.1f} GH/s total")
-        print("Note: PLL0_CFG bit packing is inferred from documented field widths; readback/lock are the safety checks.")
+        print("Note: PLL0_CFG bit packing follows the MC3 errata; readback/lock are the safety checks.")
 
         try:
             before_status = [
@@ -827,7 +827,8 @@ class Anvil:
                 return
 
             print("")
-            print("PLL reprogramming is experimental; writing PLL0_CFG while the chip is running can stop hashing.")
+            print("PLL reprogramming will use the errata sequence: disable, configure, enable 0x1, enable 0x3.")
+            print("Reapply mining work after changing frequency.")
             if not confirm("Force PLL write now?"):
                 return
 
@@ -936,6 +937,7 @@ class Anvil:
             print(f"  0x{mc3.PLL0_CFG:08X} = 0x{pll_cfg:08X}")
         else:
             print(f"  0x{mc3.PLL0_CFG:08X} skipped")
+        print(f"  0x{mc3.PLL0_EN:08X} = 0x{mc3.PLL0_ENABLE:08X}")
         print(f"  0x{mc3.PLL0_EN:08X} = 0x{mc3.DEFAULT_PLL0_ENABLE:08X}")
         if update_rolltime:
             print(f"  0x{mc3.ROLLTIME:08X} = 0x{rolltime:08X}")
@@ -989,17 +991,19 @@ class Anvil:
         )
         self.mc3_hash_frequency_mhz = frequency_mhz
         rolltime = mc3.rolltime_for_pll_mhz(frequency_mhz)
-        core_target = prompt_int("Core target", default=0x00, minimum=0, maximum=0xFF)
-        timer_count = prompt_int("SPDLOG timer count", default=0x0030, minimum=1, maximum=0xFFFF)
+        leading_zeros = prompt_int("Core target leading zeros", default=24, minimum=24, maximum=32)
+        core_target = mc3.core_target_for_leading_zeros(leading_zeros)
+        requested_runtime = prompt_float("SPDLOG runtime seconds", default=4.0, minimum=0.1)
+        timer_count = mc3.spdlog_timer_count_for_seconds(requested_runtime)
 
         runtime = mc3.spdlog_runtime_seconds(timer_count)
-        leading_zeros = mc3.core_target_leading_zeros(core_target)
         chip_ids = tuple(range(first_chip_id, first_chip_id + chip_count))
         work = mc3.app_note_version_rolling_work(note=(0x3001, 0, 0, 0))
         base = mc3.SPDLOG_BASE_DEFAULT
         registers = mc3.spdlog_registers(base=base)
 
-        print(f"Runtime: {runtime:.3f}s")
+        print(f"Requested runtime: {requested_runtime:.3f}s")
+        print(f"SPDLOG timer count: 0x{timer_count:04X} ({timer_count}), actual runtime: {runtime:.3f}s")
         print(f"Using ROLLTIME for {frequency_mhz} MHz: 0x{rolltime:08X}")
         print(f"Core target 0x{core_target:02X}: {leading_zeros} leading zeros")
         print(f"GLOBAL write: 0x{mc3.GLOBAL_SPD:08X} = 0x{mc3.DEFAULT_GLOBAL_SPD_VALUE:08X}")

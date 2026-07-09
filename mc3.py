@@ -107,6 +107,8 @@ DEFAULT_WORK_CFG_APPLY_AND_RESET = 0x8800D2FF
 DEFAULT_WORK_CFG_MINING = 0x880058FF
 DEFAULT_WORK_CFG_SPDLOG = 0x8C00DA00
 DEFAULT_V_CTRL_VERSION_ROLLING = 0xFFFF0001
+PLL0_DISABLE = 0x00000000
+PLL0_ENABLE = 0x00000001
 DEFAULT_PLL0_ENABLE = 0x00000003
 DEFAULT_WORK_TARGET_L = 0xFFFFFFFF
 DEFAULT_WORK_TARGET_H = 0xFFFFFFFF
@@ -352,8 +354,8 @@ def version_rolling_mining_config_registers(
 
 
 def pll_config_value(refdiv, fbdiv, postdiv1, postdiv2):
-    if not 1 <= refdiv <= 0x40:
-        raise ValueError("refdiv must encode into 6 bits")
+    if not 0 <= refdiv <= 0x3F:
+        raise ValueError("refdiv must fit in 6 bits")
     if not 0 <= fbdiv <= 0xFFF:
         raise ValueError("fbdiv must fit in 12 bits")
     if not 0 <= postdiv1 <= 0x7:
@@ -361,10 +363,10 @@ def pll_config_value(refdiv, fbdiv, postdiv1, postdiv2):
     if not 0 <= postdiv2 <= 0x7:
         raise ValueError("postdiv2 must fit in 3 bits")
 
-    # Assumed packing from the documented field widths and hardware readback:
-    # REFDIV[5:0] encodes refdiv - 1, FBDIV[17:6],
-    # POSTDIV1[20:18], POSTDIV2[23:21].
-    return (refdiv - 1) | (fbdiv << 6) | (postdiv1 << 18) | (postdiv2 << 21)
+    # MC3 errata PLL0_CFG packing:
+    # bit 3 POSTDIVEN, FBDIV[15:4], REFDIV[21:16],
+    # POSTDIV1[24:22], POSTDIV2[27:25].
+    return (1 << 3) | (fbdiv << 4) | (refdiv << 16) | (postdiv1 << 22) | (postdiv2 << 25)
 
 
 def pll_frequency_mhz(refdiv, fbdiv, postdiv1, postdiv2, refclk_mhz=PLL_REFCLK_MHZ):
@@ -404,7 +406,9 @@ def set_hash_frequency(
     pll_config = pll_config_value_for_mhz(frequency_mhz)
     writes = [
         (GLOBAL_SPD, DEFAULT_GLOBAL_SPD_VALUE),
+        (PLL0_EN, PLL0_DISABLE),
         (PLL0_CFG, pll_config),
+        (PLL0_EN, PLL0_ENABLE),
         (PLL0_EN, DEFAULT_PLL0_ENABLE),
     ]
     if update_rolltime:
@@ -434,7 +438,12 @@ def cold_set_hash_frequency(
     ]
     if write_pll_config:
         writes.append((PLL0_CFG, pll_config))
-    writes.append((PLL0_EN, DEFAULT_PLL0_ENABLE))
+    writes.extend(
+        [
+            (PLL0_EN, PLL0_ENABLE),
+            (PLL0_EN, DEFAULT_PLL0_ENABLE),
+        ]
+    )
     if update_rolltime:
         writes.append((ROLLTIME, rolltime_for_pll_mhz(frequency_mhz)))
     return write_registers(
@@ -552,6 +561,12 @@ def core_target_leading_zeros(core_target):
     if core_target == 0:
         return 24
     return 24 + ((core_target + 1).bit_length() - 1)
+
+
+def core_target_for_leading_zeros(leading_zeros):
+    if not 24 <= leading_zeros <= 32:
+        raise ValueError("leading_zeros must be 24-32")
+    return (1 << (leading_zeros - 24)) - 1
 
 
 def spdlog_hashrate_hs(pass_count, runtime_seconds, core_target):

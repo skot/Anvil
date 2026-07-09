@@ -95,7 +95,7 @@ class MC3MiningWorkTests(unittest.TestCase):
     def test_recommended_pll_config_and_rolltime_for_200mhz(self):
         self.assertEqual(mc3.recommended_pll_config_for_mhz(200), (1, 160, 4, 3))
         self.assertEqual(mc3.pll_frequency_mhz(1, 160, 4, 3), 200)
-        self.assertEqual(mc3.pll_config_value_for_mhz(200), 0x00702800)
+        self.assertEqual(mc3.pll_config_value_for_mhz(200), 0x07010A08)
         self.assertEqual(mc3.rolltime_for_pll_mhz(200), 0x000FFFCE)
         self.assertAlmostEqual(mc3.expected_hashrate_ghs(200, chip_count=4), 998.4)
 
@@ -115,7 +115,7 @@ class MC3MiningWorkTests(unittest.TestCase):
 
     def test_hash_frequency_status_matches_expected_frequency(self):
         status = {
-            "pll0_cfg": 0x00702800,
+            "pll0_cfg": 0x07010A08,
             "pll0_en": 0x00000007,
             "pll0_locked": True,
             "rolltime": 0x000FFFCE,
@@ -125,6 +125,28 @@ class MC3MiningWorkTests(unittest.TestCase):
 
         status["pll0_locked"] = False
         self.assertFalse(mc3.hash_frequency_status_matches(status, 200))
+
+    def test_set_hash_frequency_writes_errata_live_reprogram_sequence(self):
+        fake = FakeSerial()
+
+        mc3.set_hash_frequency(fake, 200, start_chip_id=0, chip_num=mc3.CHIP_NUM_ALL)
+
+        decoded = [decode_write_packet(packet) for packet in fake.writes]
+        register_writes = [
+            (entry["chip_id"], entry["chip_num"], entry["register"], entry["values"][0])
+            for entry in decoded
+        ]
+        self.assertEqual(
+            register_writes,
+            [
+                (0, mc3.CHIP_NUM_ALL, 0x00011000, 0x80000570),
+                (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000000),
+                (0, mc3.CHIP_NUM_ALL, 0x00040000, 0x07010A08),
+                (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000001),
+                (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000003),
+                (0, mc3.CHIP_NUM_ALL, 0x00000410, 0x000FFFCE),
+            ],
+        )
 
     def test_cold_set_hash_frequency_writes_startup_pll_sequence(self):
         fake = FakeSerial()
@@ -140,7 +162,8 @@ class MC3MiningWorkTests(unittest.TestCase):
             register_writes,
             [
                 (0, mc3.CHIP_NUM_ALL, 0x00011000, 0x80000570),
-                (0, mc3.CHIP_NUM_ALL, 0x00040000, 0x00702800),
+                (0, mc3.CHIP_NUM_ALL, 0x00040000, 0x07010A08),
+                (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000001),
                 (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000003),
                 (0, mc3.CHIP_NUM_ALL, 0x00000410, 0x000FFFCE),
             ],
@@ -166,6 +189,7 @@ class MC3MiningWorkTests(unittest.TestCase):
             register_writes,
             [
                 (0, mc3.CHIP_NUM_ALL, 0x00011000, 0x80000570),
+                (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000001),
                 (0, mc3.CHIP_NUM_ALL, 0x00040004, 0x00000003),
                 (0, mc3.CHIP_NUM_ALL, 0x00000410, 0x000FFFCE),
             ],
@@ -319,12 +343,17 @@ class MC3MiningWorkTests(unittest.TestCase):
             },
         )
         self.assertAlmostEqual(mc3.spdlog_runtime_seconds(0x0030), 4.02653184)
+        self.assertEqual(mc3.spdlog_timer_count_for_seconds(4.0), 0x0030)
         self.assertEqual(mc3.spdlog_timer_value(0x0030), 0x00010030)
         self.assertEqual(mc3.core_target_leading_zeros(0x00), 24)
         self.assertEqual(mc3.core_target_leading_zeros(0x01), 25)
         self.assertEqual(mc3.core_target_leading_zeros(0x03), 26)
+        self.assertEqual(mc3.core_target_leading_zeros(0x05), 26)
         self.assertEqual(mc3.core_target_leading_zeros(0x7F), 31)
         self.assertEqual(mc3.core_target_leading_zeros(0xFF), 32)
+        self.assertEqual(mc3.core_target_for_leading_zeros(24), 0x00)
+        self.assertEqual(mc3.core_target_for_leading_zeros(26), 0x03)
+        self.assertEqual(mc3.core_target_for_leading_zeros(32), 0xFF)
         self.assertEqual(mc3.spdlog_hashrate_hs(2, 4.0, 0x00), 2**23)
         self.assertEqual(mc3.spdlog_candidate_hashrate_hs(2, 3, 4.0, 0x00), 5 * 2**22)
 
