@@ -1109,8 +1109,8 @@ class Anvil:
         while True:
             print("")
             print("Fan")
-            print("  1) Set fan duty percent")
-            print("  2) Set raw fan duty")
+            print("  1) Set fan speed percent")
+            print("  2) Set raw fan PWM byte")
             print("  3) Read RPM")
             print("  4) Poll RPM")
             print("  b) Back")
@@ -1134,9 +1134,9 @@ class Anvil:
         if not ser:
             return
 
-        percent = prompt_int("Fan duty percent", default=50, minimum=0, maximum=100)
-        duty = round(percent * 255 / 100)
-        print(f"Setting fan duty to {percent}% ({duty}/255)...")
+        percent = prompt_int("Fan speed percent", default=50, minimum=0, maximum=100)
+        duty = bitaxeraw.fan_speed_percent_to_raw_duty(percent)
+        print(f"Setting fan speed to {percent}% (raw active-low duty {duty}/255)...")
         bitaxeraw.fan_set_duty(ser, 0xAC, duty, debug=self.debug)
 
     def fan_set_raw_duty(self):
@@ -1144,8 +1144,8 @@ class Anvil:
         if not ser:
             return
 
-        duty = prompt_int("Fan raw duty", default=128, minimum=0, maximum=255)
-        print(f"Setting fan duty to {duty}/255...")
+        duty = prompt_int("Fan raw PWM byte", default=128, minimum=0, maximum=255)
+        print(f"Setting raw active-low fan PWM byte to {duty}/255...")
         bitaxeraw.fan_set_duty(ser, 0xAC, duty, debug=self.debug)
 
     def fan_read_rpm(self):

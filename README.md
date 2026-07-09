@@ -12,7 +12,7 @@ Anvil is an interactive Python bringup console for bitaxe prototypes running
 - Starts an MC3 version-rolling mining smoke test from the static app-note work vector.
 - Reads the MC3 version-rolling nonce buffer.
 - Sends raw ASIC UART test patterns for logic-analyzer debugging.
-- Sets fan PWM duty and reads/polls fan RPM.
+- Sets fan speed percent or raw active-low PWM byte and reads/polls fan RPM.
 - Lists available serial ports to help identify the control and ASIC interfaces.
 
 ## Usage
@@ -47,7 +47,7 @@ GPIO page: 0x06
   0x02 = TPS546 enable, ESP32 GPIO10
 
 FAN page: 0x08
-  0x00 = set duty, raw 0-255
+  0x00 = set active-low PWM byte, raw 0-255
   0x01 = read RPM, little-endian u32
 ```
 
@@ -129,7 +129,7 @@ MC3 chain count: 4
 11. Use `MC3 SPD logger hashrate test` to run the documented speed logger,
     read per-chip pass/fail counters from the confirmed `0x11000` SPDLOG base,
     and report measured GH/s.
-12. Use `Fan` to set PWM duty and verify tach/RPM.
+12. Use `Fan` to set speed percent or raw active-low PWM byte and verify tach/RPM.
 
 ## Tests
 

@@ -20,6 +20,7 @@ ADC_DOMAIN3 = 0x52
 
 FAN_SET_DUTY_CMD = 0x00
 FAN_READ_RPM_CMD = 0x01
+FAN_DUTY_MAX = 255
 
 def prettyHex(data):
     return ' '.join(f'{byte:02X}' for byte in data)
@@ -47,7 +48,7 @@ def prettyHex9(data):
     return ' '.join(result)
 
 def fan_set_duty(ser, id, duty, debug=False):
-    duty = max(0, min(255, int(duty)))
+    duty = max(0, min(FAN_DUTY_MAX, int(duty)))
     packet_len = 7
     packet = bytes([packet_len, 0x00, id, 0x00, PAGE_FAN, FAN_SET_DUTY_CMD, duty])
 
@@ -75,8 +76,12 @@ def fan_set_duty(ser, id, duty, debug=False):
     return
 
 def fan_set_speed(ser, id, speed_percent, debug=False):
-    duty = round(max(0, min(100, int(speed_percent))) * 255 / 100)
+    duty = fan_speed_percent_to_raw_duty(speed_percent)
     return fan_set_duty(ser, id, duty, debug=debug)
+
+def fan_speed_percent_to_raw_duty(speed_percent):
+    speed_percent = max(0, min(100, int(speed_percent)))
+    return FAN_DUTY_MAX - round(speed_percent * FAN_DUTY_MAX / 100)
 
 def get_fan_rpm(ser, id, debug=False):
     packet_len = 6
