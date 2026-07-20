@@ -764,6 +764,41 @@ def set_vout_command(ser, vout, debug=False):
     smb_write_word(ser, PMBUS_VOUT_COMMAND, float_2_ulinear16(vout), debug=debug)
 
 
+def read_telemetry_sample(ser, debug=False):
+    """Read one focused VIN/VOUT/IOUT/temperature telemetry sample."""
+    raw_values = {}
+    commands = {
+        "vin": PMBUS_READ_VIN,
+        "vout": PMBUS_READ_VOUT,
+        "iout": PMBUS_READ_IOUT,
+        "vr_temp": PMBUS_READ_TEMPERATURE_1,
+    }
+    for name, command in commands.items():
+        value = smb_read_word(ser, command, debug=debug)
+        if value is None:
+            raise RuntimeError(f"TPS546 {name.upper()} telemetry read failed")
+        raw_values[name] = value
+
+    return {
+        "vin": slinear11_2_float(raw_values["vin"]),
+        "vout": ulinear16_2_float(raw_values["vout"]),
+        "iout": slinear11_2_float(raw_values["iout"]),
+        "vr_temp": slinear11_2_float(raw_values["vr_temp"]),
+    }
+
+
+def average_telemetry(samples):
+    """Return the arithmetic mean of focused TPS546 telemetry samples."""
+    if not samples:
+        raise ValueError("At least one telemetry sample is required")
+
+    names = ("vin", "vout", "iout", "vr_temp")
+    return {
+        name: sum(sample[name] for sample in samples) / len(samples)
+        for name in names
+    }
+
+
 def TPS546_status(ser):
     TPS_STATUS = {}
     # 1) Top-level

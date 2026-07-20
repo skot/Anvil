@@ -36,6 +36,38 @@ Override ports when needed:
 
 Use `--debug` to print extra low-level control packets.
 
+## TPS546 Current Calibrator
+
+`Calibrator.py` automates TPS546 current telemetry sweeps with a Rigol DL3021
+electronic load connected over LAN. Initialize and enable the TPS546 in Anvil,
+quit Anvil so it releases the control serial port, and then run:
+
+```bash
+./Calibrator.py
+```
+
+The defaults connect to the load at `192.168.1.176:5555`, sweep from 0 A to
+20 A in 1 A steps, settle for 2 seconds at each step, average 10 samples, and
+write a timestamped CSV file under `local/`. The CSV contains both DL3021
+voltage/current/power measurements and TPS546 VIN/VOUT/IOUT/temperature data.
+
+For an up/down high-current validation with a five-minute soak at 40 A:
+
+```bash
+./Calibrator.py \
+  --stop-current 40 \
+  --sweep both \
+  --top-soak-seconds 300 \
+  --max-vr-temp 100
+```
+
+Review the displayed plan and confirm before starting. Calibrator aborts if
+VOUT collapses, VR temperature exceeds the configured limit, or load power
+exceeds the configured limit. It also verifies the DL3021 mode, setpoint, and
+measured current at every step. It sets the load to 0 A and turns its input
+off after success, failure, or Ctrl-C. Top-current soak periods are also
+monitored continuously using the same safety limits.
+
 ## Firmware Expectations
 
 Anvil expects a bitaxe-raw firmware build with these control pages:

@@ -102,8 +102,9 @@ TPS546_CONFIG_PROTO = {
     "VIN_ON": 11.0,
     "VIN_OFF": 10.5,
     
-    "IOUT_CAL_GAIN": 0xC880,
-    "IOUT_CAL_OFFSET": 0xE000,
+    # Calibrated from the thermally soaked bitaxeProto 0-35 A up/down sweep.
+    "IOUT_CAL_GAIN": 0xC881,   # Linear11: 1.0078125
+    "IOUT_CAL_OFFSET": 0xE008, # Linear11: +0.5 A
     
     "VOUT_OV_FAULT_LIMIT": 1.25, # % above VOUT_COMMAND
     "VOUT_OV_FAULT_RESPONSE": 0xBD,

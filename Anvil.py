@@ -151,6 +151,7 @@ class Anvil:
             print("  5) Poll status")
             print("  6) Read settings")
             print("  7) Clear faults")
+            print("  8) Average telemetry samples")
             print("  b) Back")
             choice = input("TPS546> ").strip().lower()
 
@@ -168,6 +169,8 @@ class Anvil:
                 self.tps_read_settings()
             elif choice == "7":
                 self.tps_clear_faults()
+            elif choice == "8":
+                self.tps_average_telemetry()
             elif choice in ("b", "back", "q"):
                 return
             else:
@@ -260,6 +263,50 @@ class Anvil:
         if ser:
             TPS546D24.clear_faults(ser)
             TPS546D24.TPS546_status(ser)
+
+    def tps_average_telemetry(self):
+        ser = self.require_control()
+        if not ser:
+            return
+
+        sample_count = prompt_int("Number of samples", default=10, minimum=1, maximum=10000)
+        interval = prompt_float("Interval between samples seconds", default=0.1, minimum=0.0)
+        samples = []
+
+        print("")
+        print("Sample  VIN (V)  VOUT (V)  IOUT (A)  VR_TEMP (C)")
+        print("------  -------  --------  --------  -----------")
+        try:
+            for index in range(sample_count):
+                sample = TPS546D24.read_telemetry_sample(ser, debug=self.debug)
+                samples.append(sample)
+                print(
+                    f"{index + 1:>6}  "
+                    f"{sample['vin']:>7.3f}  "
+                    f"{sample['vout']:>8.3f}  "
+                    f"{sample['iout']:>8.3f}  "
+                    f"{sample['vr_temp']:>11.3f}"
+                )
+                if index + 1 < sample_count and interval:
+                    time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\nSampling stopped by user.")
+        except RuntimeError as exc:
+            print(f"\nSampling stopped: {exc}")
+
+        if not samples:
+            print("No telemetry samples collected.")
+            return
+
+        averages = TPS546D24.average_telemetry(samples)
+        print("------  -------  --------  --------  -----------")
+        print(
+            f"AVG({len(samples):>2})  "
+            f"{averages['vin']:>7.3f}  "
+            f"{averages['vout']:>8.3f}  "
+            f"{averages['iout']:>8.3f}  "
+            f"{averages['vr_temp']:>11.3f}"
+        )
 
     def asic_menu(self):
         while True:
