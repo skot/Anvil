@@ -5,6 +5,9 @@ PAGE_I2C = 0x05
 PAGE_GPIO = 0x06
 PAGE_ADC = 0x07
 PAGE_FAN = 0x08
+PAGE_DISP = 0x09
+
+I2C_WRITE_CMD = 0x20
 
 GPIO_HIGH = 0x01
 GPIO_LOW = 0x00
@@ -46,6 +49,48 @@ def prettyHex9(data):
             value = (upper_byte << 8) | lower_byte
             result.append(f'{value:03X}')
     return ' '.join(result)
+
+def disp_write(ser, id, address, register, data, debug=False):
+    """Write a register and payload through bitaxe-raw's DISP I2C page."""
+    try:
+        payload = bytes(data)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("display data must contain bytes in the range 0..255") from exc
+
+    for label, value in (("command ID", id), ("I2C address", address), ("register", register)):
+        if not 0 <= value <= 0xFF:
+            raise ValueError(f"{label} must be in the range 0..255")
+
+    packet_len = 8 + len(payload)
+    if packet_len > 0xFFFF:
+        raise ValueError("display write is too large for a bitaxe-raw packet")
+
+    packet = bytes([
+        packet_len & 0xFF,
+        packet_len >> 8,
+        id,
+        0x00,
+        PAGE_DISP,
+        I2C_WRITE_CMD,
+        address,
+        register,
+    ]) + payload
+
+    if debug:
+        print("ctrl disp tx: [%s]" % prettyHex(packet))
+
+    ser.write(packet)
+    rxdata = ser.read(4)
+    if len(rxdata) != 4:
+        raise RuntimeError(f"display write expected a 4-byte response, got {len(rxdata)}")
+    if debug:
+        print("ctrl disp rx: [%s]" % prettyHex(rxdata))
+    if rxdata[2] != id:
+        raise RuntimeError(
+            "display write command ID mismatch: expected %02X, got %02X"
+            % (id, rxdata[2])
+        )
+    return rxdata
 
 def fan_set_duty(ser, id, duty, debug=False):
     duty = max(0, min(FAN_DUTY_MAX, int(duty)))

@@ -71,7 +71,7 @@ TPS546_CONFIG_PROTO = {
     "CAPABILITY": 0xD0,
     "SMBALERT_MASK": [0x0200, 0x1800, 0xE800, 0x0000, 0x0000, 0x0100, 0x4200], #Vout, Iout, Input, Temp, CML, Other, MFR_SPECIFIC
 
-    "FREQUENCY_SWITCH": 1300, #kHz
+    "FREQUENCY_SWITCH": 1100, #kHz
 
     "SYNC_CONFIG": 0x00, # Enable Auto Detect SYNC
     "STACK_CONFIG": 0x0000, # 1 module
@@ -84,7 +84,7 @@ TPS546_CONFIG_PROTO = {
     "MFR_MODEL": [0x00, 0x00, 0x00],
     "MFR_REVISION": [0x00, 0x00, 0x00],
     "MFR_SERIAL": [0x00, 0x00, 0x00],
-
+    
     "COMPENSATION_CONFIG": [0x13, 0x20, 0xC6, 0x19, 0xC6], # calculated with TPS546x24A_Compensation_Pinstrap_Calculator_Release20200120.xlsx -> 0x13 20 C6 19 C6
     "POWER_STAGE_CONFIG": 0x70,
     "TELEMETRY_CONFIG": [0x03, 0x03, 0x03, 0x03, 0x03, 0x00],

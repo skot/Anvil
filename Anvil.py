@@ -7,6 +7,7 @@ import sys
 import time
 
 import bitaxeraw
+import bonanza_display
 import mc3
 import TPS546D24
 import tps546D24_values
@@ -31,6 +32,9 @@ class Anvil:
         self.asic = None
         self.tps_initialized = False
         self.mc3_hash_frequency_mhz = 200
+        self.bonanza_values = {
+            name: spec["default"] for name, spec in bonanza_display.FIELD_SPECS.items()
+        }
 
     def run(self):
         print("Anvil - bitaxeProto bringup console")
@@ -46,7 +50,8 @@ class Anvil:
             print("  2) TPS546 voltage regulator")
             print("  3) Proto MC3 ASICs")
             print("  4) Fan")
-            print("  5) List serial ports")
+            print("  5) bonanzaDisplay")
+            print("  6) List serial ports")
             print("  q) Quit")
             choice = input("> ").strip().lower()
 
@@ -59,6 +64,8 @@ class Anvil:
             elif choice == "4":
                 self.fan_menu()
             elif choice == "5":
+                self.bonanza_display_menu()
+            elif choice == "6":
                 self.list_serial_ports()
             elif choice in ("q", "quit", "exit"):
                 self.shutdown()
@@ -77,7 +84,7 @@ class Anvil:
         if ctrl_ok and asic_ok:
             print("Serial ports ready.")
         else:
-            print("Serial setup incomplete. Check the selected ports or run option 3 to list candidates.")
+            print("Serial setup incomplete. Check the selected ports or use List serial ports.")
         return ctrl_ok and asic_ok
 
     def connect_control(self, serial_module=None):
@@ -1216,6 +1223,85 @@ class Anvil:
             print("")
             print("Stopped polling.")
 
+    def bonanza_display_menu(self):
+        field_names = tuple(bonanza_display.FIELD_SPECS)
+        while True:
+            print("")
+            print("bonanzaDisplay")
+            for index, field_name in enumerate(field_names, start=1):
+                spec = bonanza_display.FIELD_SPECS[field_name]
+                print(f" {index:>2}) Write {spec['label']}")
+            print(f" {len(field_names) + 1:>2}) Write all dashboard values")
+            print("  b) Back")
+            choice = input("Display> ").strip().lower()
+
+            if choice in ("b", "back", "q"):
+                return
+            try:
+                option = int(choice)
+            except ValueError:
+                print("Unknown option")
+                continue
+
+            if 1 <= option <= len(field_names):
+                self.bonanza_write_field(field_names[option - 1], prompt=True)
+            elif option == len(field_names) + 1:
+                self.bonanza_write_all()
+            else:
+                print("Unknown option")
+
+    def prompt_bonanza_value(self, field_name):
+        spec = bonanza_display.FIELD_SPECS[field_name]
+        current = self.bonanza_values[field_name]
+        if spec["kind"] == "string":
+            return prompt_string(
+                spec["label"],
+                default=current,
+                maximum=spec["size"] - 1,
+                ascii_only=True,
+            )
+        maximum = 100 if field_name == "fan_percent" else 0xFFFFFFFF
+        return prompt_int(spec["label"], default=current, minimum=0, maximum=maximum)
+
+    def bonanza_write_field(self, field_name, prompt=False, command_id=0xAE):
+        ser = self.require_control()
+        if not ser:
+            return False
+
+        if prompt:
+            self.bonanza_values[field_name] = self.prompt_bonanza_value(field_name)
+        value = self.bonanza_values[field_name]
+        spec = bonanza_display.FIELD_SPECS[field_name]
+        try:
+            bonanza_display.write_field(
+                ser,
+                command_id,
+                field_name,
+                value,
+                debug=self.debug,
+            )
+        except (ValueError, RuntimeError) as exc:
+            print(f"bonanzaDisplay write failed: {exc}")
+            return False
+        print(f"Wrote {spec['label']} = {value!r} to register 0x{spec['register']:02X}.")
+        return True
+
+    def bonanza_write_all(self):
+        print("Enter the complete dashboard snapshot.")
+        for field_name in bonanza_display.FIELD_SPECS:
+            self.bonanza_values[field_name] = self.prompt_bonanza_value(field_name)
+
+        print("Writing dashboard values to bonanzaDisplay at I2C address 0x3C...")
+        for offset, field_name in enumerate(bonanza_display.FIELD_SPECS):
+            if not self.bonanza_write_field(
+                field_name,
+                command_id=(0xB0 + offset) & 0xFF,
+            ):
+                print("Stopped dashboard write after the first error.")
+                return False
+        print("bonanzaDisplay dashboard write complete.")
+        return True
+
     def list_serial_ports(self):
         port_info = serial_port_info()
         ports = sorted(port_info) if port_info else sorted(
@@ -1316,6 +1402,22 @@ def prompt_int(prompt, default, minimum=None, maximum=None):
         return value
 
 
+def prompt_string(prompt, default, maximum=None, ascii_only=False):
+    while True:
+        response = input(f"{prompt} [{default}]: ").strip()
+        value = response if response else default
+        if ascii_only:
+            try:
+                value.encode("ascii")
+            except UnicodeEncodeError:
+                print("Enter ASCII characters only.")
+                continue
+        if maximum is not None and len(value) > maximum:
+            print(f"Enter at most {maximum} characters.")
+            continue
+        return value
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Interactive bitaxeProto bringup console.")
     parser.add_argument(
@@ -1350,7 +1452,7 @@ def parse_args(argv):
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Print raw control packets for GPIO operations.",
+        help="Print raw control packets where supported.",
     )
     return parser.parse_args(argv)
 

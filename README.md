@@ -13,6 +13,7 @@ Anvil is an interactive Python bringup console for bitaxe prototypes running
 - Reads the MC3 version-rolling nonce buffer.
 - Sends raw ASIC UART test patterns for logic-analyzer debugging.
 - Sets fan speed percent or raw active-low PWM byte and reads/polls fan RPM.
+- Writes identity and mining metrics to a bonanzaDisplay over the dedicated DISP I2C bus.
 - Lists available serial ports to help identify the control and ASIC interfaces.
 
 ## Usage
@@ -81,7 +82,14 @@ GPIO page: 0x06
 FAN page: 0x08
   0x00 = set active-low PWM byte, raw 0-255
   0x01 = read RPM, little-endian u32
+
+DISP page: 0x09
+  0x20 = write to the dedicated display I2C bus
 ```
+
+The `bonanzaDisplay` menu writes the display at address `0x3C`. String fields
+are bounded NUL-terminated ASCII and numeric fields are unsigned 32-bit
+little-endian values, matching the bonanzaDisplay register protocol.
 
 The ASIC serial port is the second USB CDC interface and is bridged by
 bitaxe-raw to ESP32 UART1:
@@ -162,6 +170,8 @@ MC3 chain count: 4
     read per-chip pass/fail counters from the confirmed `0x11000` SPDLOG base,
     and report measured GH/s.
 12. Use `Fan` to set speed percent or raw active-low PWM byte and verify tach/RPM.
+13. Use `bonanzaDisplay` to write individual identity/mining fields or enter and
+    send a complete dashboard snapshot.
 
 ## Tests
 
