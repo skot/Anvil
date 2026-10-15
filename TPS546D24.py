@@ -1,4 +1,6 @@
 import rawi2c
+import bitaxeraw
+import TPS546helpers
 import struct
 import time
 from pmbusconst import *
@@ -8,7 +10,7 @@ from tps546D24_values import *
 
 W_CMD_ID = 0xAA # arbitrary write command ID
 R_CMD_ID = 0xBB # arbitrary read command ID
-GPIO_TPS546_EN = 0x02
+GPIO_TPS546_EN = bitaxeraw.GPIO_TPS546_EN
 
 DEVICE_ID1 = [0x54, 0x49, 0x54, 0x6D, 0x24, 0x41] # TPS546D24A
 DEVICE_ID2 = [0x54, 0x49, 0x54, 0x6D, 0x24, 0x62] # TPS546D24S
@@ -217,33 +219,8 @@ def prettyHex(data):
     return ' '.join(f'{byte:02X}' for byte in data)
 
 def enable_pin(ser, state, debug=False):
-    id = 0xAA
-    if state:
-        value = 0x01  # Enable
-    else:
-        value = 0x00  # Disable
-    packet = bytes([7, 0x00, id, 0x00, 0x06, GPIO_TPS546_EN, value])
-    if debug:
-        print("ctrl gpio tx: [%s]" % prettyHex(packet))
+    return bitaxeraw.gpio_set(ser, W_CMD_ID, GPIO_TPS546_EN, int(bool(state)), debug=debug)
 
-    ser.write(packet)
-
-    # wait for the response
-    rxdata = ser.read(4)
-    if rxdata:
-        bytes_read = len(rxdata)
-        if bytes_read > 0:
-            if debug:
-                print("ctrl gpio rx: [%s]" % prettyHex(rxdata))
-            if rxdata[2] != id:
-                print("Error: ID mismatch. Expected %02X, got %02X" % (id, rxdata[2]))
-                return
-        else:
-            print("No data received")
-            return
-    else:
-        print("No data received")
-    return
 
 def get_device_id(ser):
   response = rawi2c.i2c_read_bytes(ser, R_CMD_ID, TPS546_I2CADDR, PMBUS_IC_DEVICE_ID, 7)
@@ -324,14 +301,14 @@ def init_disable(ser):
 
 
 def Init(ser, TPS546_INIT_CONFIG):
-    # Establish communication with regulator
-    get_device_id(ser)
+    if not get_device_id(ser):
+        raise RuntimeError("Expected a TPS546D24A/S regulator at I2C address 0x24")
+    sync_vout_mode(ser)
 
 def write_settings(ser, TPS546_INIT_CONFIG):
-    # ON_OFF_CONFIG
-    # if TPS546_INIT_CONFIG["ON_OFF_CONFIG"] is not None:
-    #     print("Setting ON_OFF_CONFIG: %02X" % TPS546_INIT_CONFIG["ON_OFF_CONFIG"])
-    #     smb_write_byte(ser, PMBUS_ON_OFF_CONFIG, TPS546_INIT_CONFIG["ON_OFF_CONFIG"])
+    sync_vout_mode(ser)
+    if TPS546_INIT_CONFIG["ON_OFF_CONFIG"] is not None:
+        smb_write_byte(ser, PMBUS_ON_OFF_CONFIG, TPS546_INIT_CONFIG["ON_OFF_CONFIG"])
 
     # Phase addressing
     print("Setting CMD_PHASE: %02X" % TPS546_INIT_CONFIG["PHASE"])
@@ -533,6 +510,7 @@ def write_settings(ser, TPS546_INIT_CONFIG):
     smb_write_word(ser, PMBUS_TOFF_FALL, int_2_slinear11(TPS546_INIT_CONFIG["TOFF_FALL"]))
 
 def read_settings(ser):
+    sync_vout_mode(ser)
     # Phase addressing
     val = smb_read_byte(ser, PMBUS_PHASE)
     print(f"Reading CMD_PHASE: {val:02X}")
@@ -760,12 +738,14 @@ def enable_regulator(ser):
 
 
 def set_vout_command(ser, vout, debug=False):
+    sync_vout_mode(ser)
     print(f"Setting VOUT_COMMAND: {vout:.3f}V")
     smb_write_word(ser, PMBUS_VOUT_COMMAND, float_2_ulinear16(vout), debug=debug)
 
 
 def read_telemetry_sample(ser, debug=False):
     """Read one focused VIN/VOUT/IOUT/temperature telemetry sample."""
+    sync_vout_mode(ser)
     raw_values = {}
     commands = {
         "vin": PMBUS_READ_VIN,
@@ -800,6 +780,7 @@ def average_telemetry(samples):
 
 
 def TPS546_status(ser):
+    sync_vout_mode(ser)
     TPS_STATUS = {}
     # 1) Top-level
     TPS_STATUS["status_word"] = smb_read_word(ser, PMBUS_STATUS_WORD)
@@ -950,3 +931,12 @@ def TPS546_status(ser):
             print("  FIRST_TO_ASSERT_SMBALERT")
 
     print("=================================================")
+
+
+def sync_vout_mode(ser):
+    """Use the actual regulator exponent for every VOUT conversion."""
+    mode = smb_read_byte(ser, PMBUS_VOUT_MODE)
+    if mode is None:
+        raise RuntimeError("TPS546 VOUT_MODE read failed")
+    TPS546helpers.VOUTMODE = mode
+    return mode

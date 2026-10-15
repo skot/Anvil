@@ -11,9 +11,10 @@ from datetime import datetime
 from pathlib import Path
 
 import TPS546D24
+import bitaxeraw
 
 
-DEFAULT_CTRL_PORT = "/dev/cu.usbmodem90ea13d31"
+DEFAULT_CTRL_PORT = "/dev/cu.usbmodem2553f62b1"
 DEFAULT_CTRL_BAUDRATE = 115200
 DEFAULT_LOAD_HOST = "192.168.1.176"
 DEFAULT_LOAD_PORT = 5555
@@ -438,7 +439,7 @@ def parse_args(argv=None):
     parser.add_argument("--load-host", default=DEFAULT_LOAD_HOST)
     parser.add_argument("--load-port", type=int, default=DEFAULT_LOAD_PORT)
     parser.add_argument("--load-timeout", type=float, default=5.0)
-    parser.add_argument("--ctrl-port", default=DEFAULT_CTRL_PORT)
+    parser.add_argument("--ctrl-port", default=bitaxeraw.discover_ports()[0] or DEFAULT_CTRL_PORT)
     parser.add_argument("--ctrl-baudrate", type=int, default=DEFAULT_CTRL_BAUDRATE)
     parser.add_argument("--serial-timeout", type=float, default=1.0)
     parser.add_argument("--start-current", type=float, default=0.0)

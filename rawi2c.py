@@ -1,91 +1,30 @@
-import logging
+"""Board I2C transactions through bitaxe-raw-bonanza control framing."""
+
+import bitaxeraw
+
+prettyHex = bitaxeraw.prettyHex
+
 
 def i2c_write_addr(ser, id, address, register, debug=False):
-
-    packet_len = 8
-    # Handle single byte case
-    packet = bytes([packet_len, 0x00, id, 0x00, 0x05, 0x20, address, register])
-
-    if debug:
-        print("ctrl tx: [%s]" % prettyHex(packet))
-
-    ser.write(packet)
-
-    # wait for the response
-    rxdata = ser.read(4)
-    if rxdata:
-        bytes_read = len(rxdata)
-        if bytes_read > 0:
-            if debug:
-                print("ctrl rx: [%s]" % prettyHex(rxdata))
-            if rxdata[2] != id:
-                print("Error: ID mismatch. Expected %02X, got %02X" % (id, rxdata[2]))
-                return
-        else:
-            print("No data received")
-            return
-    else:
-        print("No data received")
-    return
+    return i2c_send_bytes(ser, id, address, register, [], debug)
 
 
 def i2c_send_bytes(ser, id, address, register, data, debug=False):
+    payload = bytes(data) if isinstance(data, (list, tuple, bytes, bytearray)) else bytes([data])
+    response = bitaxeraw.control_command(
+        ser, id, bitaxeraw.PAGE_I2C, 0x20, bytes([address, register]) + payload,
+        debug=debug, decode_errors=False)
+    if response != bytes([len(payload) + 1]):
+        raise RuntimeError(f'I2C write failed: {prettyHex(response)}')
+    return response
 
-    # If data is a list, handle each byte separately
-    if isinstance(data, list):
-        packet_len = len(data) + 8
-        # Create packet with all data bytes
-        packet = bytes([packet_len & 0xFF, packet_len >> 8, id, 0x00, 0x05, 0x20, address, register] + data)
-    else:
-        packet_len = 9
-        # Handle single byte case
-        packet = bytes([packet_len, 0x00, id, 0x00, 0x05, 0x20, address, register, data])
-
-    if debug:
-        print("ctrl tx: [%s]" % prettyHex(packet))
-
-    ser.write(packet)
-
-    # wait for the response
-    rxdata = ser.read(4)
-    if rxdata:
-        bytes_read = len(rxdata)
-        if bytes_read > 0:
-            if debug:
-                print("ctrl rx: [%s]" % prettyHex(rxdata))
-            if rxdata[2] != id:
-                print("Error: ID mismatch. Expected %02X, got %02X" % (id, rxdata[2]))
-                return
-        else:
-            print("No data received")
-            return
-    else:
-        print("No data received")
-    return
 
 def i2c_read_bytes(ser, id, address, register, size, debug=False):
-    ser.reset_input_buffer()
-    packet = bytes([0x09, 0x00, id, 0x00, 0x05, 0x40, address, register, size])
-    ser.write(packet)
-    if debug:
-        print("ctrl tx: [%s]" % prettyHex(packet))
-    data = ser.read(size+3)
-    if data:
-        bytes_read = len(data)
-        if bytes_read > 0:
-            if debug:
-                print("ctrl rx: [%s]" % prettyHex(data))
-            if data[2] != id:
-                logging.error("Error: ID mismatch. Expected %02X, got %02X" % (id, data[2]))
-                return None
-        else:
-            logging.error("No data received")
-            return None
-    else:
-        logging.error("No data received")
-        return None
-
-    return data[-size:]
-
-def prettyHex(data):
-    return ' '.join(f'{byte:02X}' for byte in data)
+    if not 1 <= size <= 255:
+        raise ValueError('I2C read size must be 1..255')
+    response = bitaxeraw.control_command(
+        ser, id, bitaxeraw.PAGE_I2C, 0x40, bytes([address, register, size]),
+        debug=debug, decode_errors=False)
+    if len(response) != size:
+        raise RuntimeError(f'I2C read expected {size} bytes, received {prettyHex(response)}')
+    return response

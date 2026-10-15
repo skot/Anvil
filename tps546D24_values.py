@@ -133,49 +133,13 @@ TPS546_CONFIG_PROTO = {
     "TOFF_FALL": 0,
 }
 
-## these need to be converted into the complete format like BIRDS above
-# TPS546_CONFIG_BONANZA = {
-#     # vin voltage
-#     "VIN_ON": 11.0,
-#     "VIN_OFF": 10.5,
-#     "VIN_UV_WARN_LIMIT": 11.0,
-#     "VIN_OV_FAULT_LIMIT": 14.0,
-#     # vout voltage
-#     "SCALE_LOOP": 0.25,
-#     "VOUT_MIN": 2.1,
-#     "VOUT_MAX": 3.5,
-#     "VOUT_COMMAND": 2.8,
-#     # iout current
-#     "IOUT_OC_WARN_LIMIT": 50.00, # A
-#     "IOUT_OC_FAULT_LIMIT": 55.00, # A
-#     # config
-#     "STACK_CONFIG": 0x0001, # 2 modules
-#     "SYNC_CONFIG": 0xF0, # Enable Auto Detect SYNC
-#     "CMD_PHASE": 0xFF, # Phase addressing - 0xFF is all phases as single entity
-#     "COMPENSATION_CONFIG": [0x12, 0x20, 0x42, 0x24, 0x42], # Default compensation config
-#     "FREQUENCY": 1500,
-#     "PIN_DETECT_OVERRIDE": 0x0000 #use NVM values
-# }
+# Ported from ESP-miner-bonanza components/asic/bzm_power.c,
+# BZM_TPS546_BIRDS_PROFILE (and the bounds in include/bzm_power.h).
+# Do not reuse Proto's board-specific current calibration.
+from copy import deepcopy
 
-# TPS546_CONFIG_EVM = {
-#     # vin voltage
-#     "VIN_ON": 11.0,
-#     "VIN_OFF": 10.5,
-#     "VIN_UV_WARN_LIMIT": 11.0,
-#     "VIN_OV_FAULT_LIMIT": 14.0,
-#     # vout voltage
-#     "SCALE_LOOP": 0.25,
-#     "VOUT_MIN": 2.1,
-#     "VOUT_MAX": 3.5,
-#     "VOUT_COMMAND": 2.8,
-#     # iout current
-#     "IOUT_OC_WARN_LIMIT": 50.00, # A
-#     "IOUT_OC_FAULT_LIMIT": 55.00, # A
-#     # config
-#     "STACK_CONFIG": 0x0001, # 2 modules
-#     "SYNC_CONFIG": 0xD0, # Enable Auto Detect SYNC
-#     "CMD_PHASE": 0xFF, # Phase addressing - 0xFF is all phases as single entity
-#     "COMPENSATION_CONFIG": [0x12, 0x70, 0x42, 0x10, 0x48], # Default compensation config
-#     "FREQUENCY": 650,
-#     "PIN_DETECT_OVERRIDE": 0x0000 #use NVM values
-# }
+TPS546_CONFIG_BONANZA = deepcopy(TPS546_CONFIG_BIRDS)
+TPS546_CONFIG_BONANZA.update({
+    "ON_OFF_CONFIG": 0x1B,
+    "VOUT_MAX": 3.2,
+})
