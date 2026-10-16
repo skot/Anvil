@@ -18,6 +18,7 @@ DEFAULT_CTRL_PORT = "/dev/cu.usbmodem2553f62b1"
 DEFAULT_ASIC_PORT = "/dev/cu.usbmodem2553f62b3"
 DEFAULT_CTRL_BAUDRATE = 115200
 DEFAULT_ASIC_BAUDRATE = 2000000
+IO_TEST_MAX_CORE_VOLTS = 0.2  # Discharged stack/tap threshold, not a VDD operating point.
 
 
 class Anvil:
@@ -341,7 +342,7 @@ class Anvil:
 
     def asic_menu(self):
         actions = {
-            "1": ("Reset and enumerate BZM2 chain", self.bzm_enumerate),
+            "1": ("Reset and enumerate BZM2 chain (core VDD on)", self.bzm_enumerate),
             "2": ("Read BZM2 identity registers", self.bzm_identity),
             "3": ("Configure and read BZM2 voltage/temp", self.bzm_sensors),
             "4": ("Initialize/verify both BZM2 PLLs at 800 MHz", self.bzm_frequency),
@@ -353,6 +354,9 @@ class Anvil:
             "10": ("Assert ASIC reset and disable 5V", self.asic_disable),
             "11": ("ESP32 board diagnostics (read only)", self.board_diagnostics),
             "12": ("Raw ASIC UART TX test", self.asic_uart_tx_test),
+            "13": ("First-chip NOOP test (VDD off, 5V on during test)", lambda: self.bzm_io_test("noop")),
+            "14": ("Core-off address assignment diagnostic (full chain needs VDD)", lambda: self.bzm_io_test("assign")),
+            "15": ("Manual 5V_EN on/off", self.bzm_5v_menu),
         }
         while True:
             print("\nBonanza BZM2 ASICs")
@@ -387,6 +391,49 @@ class Anvil:
                 bitaxeraw.gpio_set(ctrl, 0xA4, bitaxeraw.GPIO_ASIC_RST, 0, self.debug)
             finally:
                 bitaxeraw.gpio_set(ctrl, 0xA5, bitaxeraw.GPIO_5V_EN, 0, self.debug)
+
+    def bzm_set_5v(self, enabled):
+        ctrl = self.require_control()
+        if not ctrl:
+            return
+        self.board_info()
+        self.bzm_chip_ids = []
+        self.bzm_clocks_verified = False
+        self.bzm_sensors_configured = False
+        try:
+            if enabled:
+                bitaxeraw.gpio_set(ctrl, 0xA4, bitaxeraw.GPIO_ASIC_RST, 0, self.debug)
+                bitaxeraw.gpio_set(ctrl, 0xA5, bitaxeraw.GPIO_5V_EN, 1, self.debug)
+            else:
+                self.asic_disable()
+            level = bitaxeraw.gpio_get(ctrl, 0xA8, bitaxeraw.GPIO_5V_EN, self.debug)
+            if level != int(enabled):
+                raise RuntimeError(f"5V_EN readback is {level}, expected {int(enabled)}")
+        except BaseException:
+            if enabled:
+                self.asic_disable()
+            raise
+        print(f"5V_EN={level} ({'ON' if level else 'OFF'}); ASIC reset asserted.")
+        return level
+
+    def bzm_5v_menu(self):
+        while True:
+            print("\nManual 5V_EN test (ASIC reset held asserted)")
+            print("  1) Turn 5V_EN ON")
+            print("  2) Turn 5V_EN OFF")
+            print("  3) Read 5V_EN")
+            print("  b) Back")
+            choice = input("5V> ").strip().lower()
+            if choice in ("b", "back", "q"):
+                return
+            if choice in ("1", "2"):
+                self.bzm_set_5v(choice == "1")
+            elif choice == "3":
+                ctrl = self.require_control()
+                if ctrl:
+                    print(f"5V_EN={bitaxeraw.gpio_get(ctrl, 0xA8, bitaxeraw.GPIO_5V_EN, self.debug)}")
+            else:
+                print("Unknown option")
 
     def bzm_enumerate(self):
         ctrl, asic = self.require_control(), self.require_asic()
@@ -423,6 +470,91 @@ class Anvil:
         for address in self.bzm_chip_ids:
             value = bzm2.read_u32(asic, address, bzm2.REG_ASIC_ID, self.debug)
             print(f"ASIC 0x{address:02X}: ASIC_ID=0x{value:08X} chain_enable={bool(value & 0x100)}")
+
+    def bzm_io_power_sample(self, ctrl):
+        """Require both disabled core controls and a discharged measured stack."""
+        operation = TPS546D24.smb_read_byte(ctrl, PMBUS_OPERATION)
+        enabled = bitaxeraw.gpio_get(ctrl, 0xB0, bitaxeraw.GPIO_TPS546_EN, self.debug)
+        pgood = bitaxeraw.gpio_get(ctrl, 0xB1, bitaxeraw.GPIO_TPS546_PGOOD, self.debug)
+        rail = TPS546D24.read_telemetry_sample(ctrl, debug=self.debug)['vout']
+        taps = bitaxeraw.read_domain_voltages(ctrl, 0xB2, self.debug)
+        if bitaxeraw.gpio_get(ctrl, 0xB3, bitaxeraw.GPIO_ASIC_TRIP, self.debug):
+            raise RuntimeError("ASIC trip input is asserted")
+        off = (not operation & 0x80 and not enabled and not pgood and
+               all(0 <= v <= IO_TEST_MAX_CORE_VOLTS for v in (rail, *taps)))
+        return {'core_off': off, 'operation': operation, 'enable': enabled,
+                'pgood': pgood, 'vout': rail, 'taps': taps}
+
+    def bzm_io_test(self, mode, count=None, assume_yes=False):
+        """Bounded control-UART test; never establish a managed powered chain."""
+        if mode not in ("noop", "assign"):
+            raise ValueError("I/O test must be noop or assign")
+        if mode == "assign" and count is None:
+            count = prompt_int("Expected BZM2 chips", default=4, minimum=1, maximum=4)
+        if mode == "assign" and (not isinstance(count, int) or not 1 <= count <= 4):
+            raise ValueError("Expected chip count must be 1..4")
+        ctrl, asic = self.require_control(), self.require_asic()
+        if not ctrl or not asic:
+            return False
+        self.board_info()
+        print("I/O-only test: turn TPS/core VDD off, reset ASICs, enable 5 V and release reset.")
+        print("Completion or failure asserts reset and turns 5 V off; PLLs and engines are not configured.")
+        if mode == "assign":
+            print("With core VDD off, this board has only answered from the first ASIC.")
+            print("For all four ASICs, enable core VDD and use ASIC menu 1 (Reset and enumerate).")
+        if not assume_yes and not confirm(f"Run BZM2 {mode} test with ASIC VDD off?"):
+            return False
+        result = {'mode': mode, 'chip_ids': [], 'noop_responses': [], 'id_registers': {}}
+        self.bzm_sensors_configured = False
+        try:
+            self.asic_disable()
+            bitaxeraw.fan_set_speed(ctrl, 0xAC, 100, debug=self.debug)
+            TPS546D24.smb_write_byte(ctrl, PMBUS_OPERATION, 0)
+            TPS546D24.enable_pin(ctrl, False, debug=self.debug)
+            deadline = time.monotonic() + 3
+            while True:
+                before = self.bzm_io_power_sample(ctrl)
+                if before['core_off']:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"Core rail did not turn off/discharge for I/O test: {before}")
+                time.sleep(0.05)
+            result['before'] = before
+            print(f"Core off: VOUT={before['vout']:.3f} V, taps={before['taps']}, PGOOD=0.")
+            bzm2.reset(ctrl, asic, self.debug)
+            active = self.bzm_io_power_sample(ctrl)
+            if not active['core_off']:
+                raise RuntimeError(f"Core rail changed after enabling 5 V: {active}")
+            if (bitaxeraw.gpio_get(ctrl, 0xB4, bitaxeraw.GPIO_5V_EN, self.debug) != 1 or
+                    bitaxeraw.gpio_get(ctrl, 0xB5, bitaxeraw.GPIO_ASIC_RST, self.debug) != 1):
+                raise RuntimeError("5 V/reset are not enabled for I/O communication")
+            if mode == "noop":
+                # Reset gates the chain at its first unassigned ASIC (0xFA).
+                for _ in range(3):
+                    reply = bzm2.noop(asic, debug=self.debug)
+                    result['noop_responses'].append(reply.hex(' '))
+                    print(f"ASIC 0xFA NOOP: {reply.hex(' ')}")
+            else:
+                try:
+                    ids = bzm2.enumerate_chain(asic, bzm2.DEFAULT_CHIP_IDS[:count], self.debug)
+                except RuntimeError as exc:
+                    raise RuntimeError(f"{exc}. This is a core-off diagnostic; for full-chain enumeration, "
+                                       "enable core VDD and use ASIC menu 1 (Reset and enumerate)") from exc
+                result['chip_ids'] = ids
+                for address in ids:
+                    value = bzm2.read_u32(asic, address, bzm2.REG_ASIC_ID, self.debug)
+                    if value != (address | 0x100):
+                        raise RuntimeError(f"ASIC 0x{address:02X} ID changed: 0x{value:08X}")
+                    result['id_registers'][address] = value
+                    print(f"ASIC 0x{address:02X}: ASIC_ID=0x{value:08X}")
+            after = self.bzm_io_power_sample(ctrl)
+            if not after['core_off']:
+                raise RuntimeError(f"Core rail changed during I/O test: {after}")
+            result['after'] = after
+        finally:
+            self.asic_disable()
+        print(f"BZM2 {mode} I/O test passed; ASIC reset asserted and 5 V off. Core VDD remains off.")
+        return result
 
     def bzm_sensors(self):
         asic = self.require_chain()
@@ -847,10 +979,14 @@ def parse_args(argv):
     mode.add_argument("--probe", action="store_true", help="Read ESP32 board diagnostics and exit without enabling power")
     mode.add_argument("--bridge-probe", action="store_true", help="Probe the RP2040 over ESP32 SWD without flashing")
     mode.add_argument("--flash-bridge", metavar="FILE", help="Load an RP2040 .bin/.uf2 through ESP32 SWD and exit")
-    parser.add_argument("--yes", action="store_true", help="Confirm the explicitly selected --flash-bridge image without prompting")
+    mode.add_argument("--bzm-io-test", choices=("noop", "assign"),
+                      help="Test BZM2 UART with core VDD off and 5 V enabled only during the test")
+    parser.add_argument("--chips", type=int, choices=range(1, 5), default=4,
+                        help="Expected chips for --bzm-io-test assign (default: 4)")
+    parser.add_argument("--yes", action="store_true", help="Confirm the selected bridge flash or BZM2 I/O test without prompting")
     args = parser.parse_args(argv)
-    if args.yes and not args.flash_bridge:
-        parser.error("--yes requires --flash-bridge FILE")
+    if args.yes and not (args.flash_bridge or args.bzm_io_test):
+        parser.error("--yes requires --flash-bridge FILE or --bzm-io-test")
     return args
 
 
@@ -865,6 +1001,10 @@ def main(argv=None):
         debug=args.debug,
     )
     try:
+        if args.bzm_io_test:
+            if not app.connect_serial_ports():
+                return 1
+            return 0 if app.bzm_io_test(args.bzm_io_test, args.chips, assume_yes=args.yes) else 1
         if args.flash_bridge or args.bridge_probe:
             if not app.connect_control():
                 return 1
@@ -879,7 +1019,7 @@ def main(argv=None):
         return app.run()
     except (KeyboardInterrupt, EOFError):
         print("\nExiting Anvil.")
-        return 0
+        return 130 if args.bzm_io_test else 0
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Anvil operation failed: {exc}")
         return 1

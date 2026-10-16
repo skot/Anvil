@@ -63,6 +63,40 @@ class AnvilBoardTests(unittest.TestCase):
             self.assertEqual(args.flash_bridge, 'bridge.uf2')
             self.assertTrue(args.yes)
 
+    def manual_5v_app(self, response):
+        identity = b'bitaxe-raw-bonanza/1004x/0.0.2'
+        app = self.make_app(frame(bytes([1, 1, 0, len(identity)]) + identity, 0xD0) + response)
+        app.bzm_chip_ids = [10, 20, 30, 40]
+        app.bzm_clocks_verified = app.bzm_sensors_configured = True
+        return app
+
+    def test_manual_5v_on_asserts_reset_before_enable_and_verifies_readback(self):
+        app = self.manual_5v_app(frame(b'\0', 0xA4) + frame(b'\1', 0xA5) + frame(b'\1', 0xA8))
+        with patch('builtins.print'):
+            self.assertEqual(app.bzm_set_5v(True), 1)
+        self.assertEqual(app.ctrl.writes[1:], [bytes.fromhex('07 00 a4 00 06 02 00'),
+                                               bytes.fromhex('07 00 a5 00 06 01 01'),
+                                               bytes.fromhex('06 00 a8 00 06 01')])
+        self.assertEqual(app.bzm_chip_ids, [])
+        self.assertFalse(app.bzm_clocks_verified or app.bzm_sensors_configured)
+
+    def test_manual_5v_off_asserts_reset_before_removing_power(self):
+        app = self.manual_5v_app(frame(b'\0', 0xA4) + frame(b'\0', 0xA5) + frame(b'\0', 0xA8))
+        with patch('builtins.print'):
+            self.assertEqual(app.bzm_set_5v(False), 0)
+        self.assertEqual(app.ctrl.writes[1:], [bytes.fromhex('07 00 a4 00 06 02 00'),
+                                               bytes.fromhex('07 00 a5 00 06 01 00'),
+                                               bytes.fromhex('06 00 a8 00 06 01')])
+
+    def test_manual_5v_on_readback_failure_restores_reset_and_power_off(self):
+        response = (frame(b'\0', 0xA4) + frame(b'\1', 0xA5) + frame(b'\0', 0xA8) +
+                    frame(b'\0', 0xA4) + frame(b'\0', 0xA5))
+        app = self.manual_5v_app(response)
+        with patch('builtins.print'), self.assertRaisesRegex(RuntimeError, 'readback'):
+            app.bzm_set_5v(True)
+        self.assertEqual(app.ctrl.writes[-2:], [bytes.fromhex('07 00 a4 00 06 02 00'),
+                                               bytes.fromhex('07 00 a5 00 06 01 00')])
+
 
 if __name__ == '__main__':
     unittest.main()

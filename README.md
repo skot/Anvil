@@ -50,14 +50,30 @@ GPIO3/R31/TP60 is D3. Each input uses a 5.1 kΩ series resistor and 100 nF
 filter capacitor, without a voltage divider. Firmware returns 16-sample averaged,
 curve-calibrated millivolts at 11 dB attenuation. These are cumulative taps
 relative to board ground; Anvil calculates individual ASIC voltages, bottom to
-top, as `D1`, `D2-D1`, `D3-D2`, and `TPS VOUT-D3`. ADC readings still need
-comparison with a meter on this board.
+top, as `D1`, `D2-D1`, `D3-D2`, and `TPS VOUT-D3`. The 0.0.2 ESP firmware
+was found to use the HAL's ADC2 eFuse data for ADC1 and omit ADC reference setup.
+The 0.0.3 ESP build backports [the upstream calibration fix](https://github.com/esp-rs/esp-hal/pull/4286).
+The user measured taps 0.694/1.398/2.104 V and total VDD 2.802 V with a DMM,
+versus earlier ESP readings 0.467/1.175/1.897 V. After flashing 0.0.3, a powered
+probe read taps 0.669/1.373/2.086 V and TPS VOUT 2.789 V, giving individual ASIC
+drops of 0.669/0.704/0.713/0.703 V. The large under-reading is substantially
+corrected. Anvil applies no guessed offset to make readings match.
+
+A fresh DMM comparison after the update gave taps 0.6987/1.3915/2.0986 V and
+VDD 2.8030 V; the following Anvil probe read 0.667/1.371/2.085 V and TPS VOUT
+2.789 V. Tap errors were -31.7/-20.5/-13.6 mV, within the calibrated ATTEN3
+±50 mV range in the [ESP32-S3 datasheet, table 5-6](https://documentation.espressif.com/esp32-s3_datasheet_en.pdf).
+These were sequential readings, not simultaneous acquisition. The DMM-derived
+chip supplies were 0.6987/0.6928/0.7071/0.7044 V (14.3 mV spread). Thus the
+remaining low-looking first-chip supply in Anvil is a measurement artifact;
+this comparison does not establish another calibration software defect.
 
 ## Bringup
 
 1. Load the updated ESP32 firmware; program the RP2040 UART bridge before
    attempting ASIC communication. Local fan/TPS/ADC functions work independently
    of the RP2040.
+   For NOOP/address tests without core VDD, use the I/O-only tests below.
 2. Use `TPS546 voltage regulator` → `Initialize`. This installs the Bonanza
    profile and leaves PMBus `OPERATION` off.
 3. Turn the regulator on. Anvil forces the fan to full speed, asserts reset,
@@ -86,15 +102,70 @@ can then be retried. Disconnecting control USB also asserts reset, disables
 5 V and forces full fan speed. The TPS output is controlled separately by
 PMBus and may remain enabled after quitting, so the current calibrator can run.
 
+## I/O-only tests with ASIC VDD off
+
+ASIC menu action **15** opens manual `5V_EN` controls: **1** turns it on,
+**2** turns it off, and **3** reads its GPIO command state. Both power actions
+assert ASIC reset and invalidate cached ASIC addresses/clocks/sensors. TPS/core
+settings are unchanged. The selected 5 V state remains when returning to the
+ASIC menu; turn it off explicitly when finished. Control USB disconnect also
+turns 5 V off. An unsuccessful ON operation attempts to restore reset/5 V off.
+
+ASIC menu actions **13** (first-chip NOOP) and **14** (core-off address assignment
+diagnostic) exercise the ASIC UART with TPS/core VDD disabled and `5V_EN` on
+only during the test. The first chip can respond in this state. **Full four-chip
+enumeration requires core VDD on this board**; enable the TPS output and use
+ASIC menu **1: Reset and enumerate** for that path. Menu 14 and the command below
+remain available to reproduce the core-off behavior, with the requested chip
+count enforced even when fewer chips respond.
+Equivalent command-line actions are:
+
+```bash
+./Anvil.py --bzm-io-test noop --yes
+./Anvil.py --bzm-io-test assign --chips 4 --yes
+```
+
+Omit `--yes` for a confirmation prompt. Each test asserts reset, turns 5 V off,
+disables PMBus `OPERATION` and TPS enable, then waits for PGOOD low and measured
+VOUT/domain taps at or below 0.2 V. The 0.2 V threshold checks discharge; it is
+not an ASIC VDD operating setting. Anvil enables 5 V, releases reset, clears
+old ASIC replies and checks core-off conditions again before sending commands.
+
+The NOOP test checks three exact `FA 0F 32 5A 42` replies from the first
+unassigned ASIC. Assignment tests enumerate the requested number of chips
+(default four), using IDs `0x0A, 0x14, 0x1E, 0x28`, verify each `ASIC_ID`
+including its chain-enable bit, and reject an extra default-address responder.
+Identity after assignment is proved by register readback. NOOPs are used at the
+default address during discovery, following the reference bringup sequence.
+The datasheet describes enumeration in sections 6.3/8.1.4 and NOOP in 8.1.7.7;
+its page-46 sample specifies the `2ZB` reply despite different prose/figure
+labels on page 45.
+
+Success, failure and Ctrl-C all assert reset and turn 5 V off. Core power is
+never enabled. Assigned IDs are discarded afterward, so these tests do not
+establish the managed powered chain needed by PLL/sensor/mining operations.
+The normal reset/enumerate path retains its PGOOD/core-voltage requirements.
+
+On the connected board, all three NOOP queries passed with core output off,
+PGOOD low and zero domain taps. The four-chip assignment test assigned/read
+`ASIC_ID=0x0000010A` on the first ASIC but failed because chip two did not answer
+at `0xFA`, despite all four ASICs being populated. After those timeouts the first
+ASIC still returned its ID, `UART_LINE_CTL=0x24` and `SLOW_CLK_DIV=2`. The user
+subsequently enabled VDD and reported responses from all four ASICs, establishing
+the core-power requirement for full-chain access on this board. Cleanup after
+the core-off test confirmed reset asserted, 5 V/TPS off, fan full and no trip.
+
 ## Protocol and implementation sources
 
-The TPS546 profile comes from `ESP-miner-bonanza` commit `8c15195`,
+The TPS546 profile was initially based on `ESP-miner-bonanza` commit `8c15195`,
 `components/asic/bzm_power.c`, `include/bzm_power.h` and the extended-config
 writer in `main/power/TPS546.c`. That fork labels its profile **1002**; the
-profile is used here for 1004x as requested. It specifies 325 kHz switching,
-2.8 V default, 2.1–3.2 V bounds, compensation `13 11 8C 1D 06`, and current
-calibration `C880/E000`. Proto's current calibration is not reused. VOUT encoding
-uses the regulator's actual `VOUT_MODE` exponent.
+profile is used here for 1004x as requested. The current 1004x settings use
+325 kHz switching, 2.8 V default, 2.1–3.2 V bounds, and current calibration
+`C880/E000`. Compensation is `13 11 8C 1D 08`, updated from the fork's last
+byte `06` using the user's TPS546D24S calculator results. Proto's current
+calibration is not reused. VOUT encoding uses the regulator's actual
+`VOUT_MODE` exponent.
 
 BZM2 commands follow the local Intel Blockscale datasheet v1.3 and the fork's
 `bzm_transport.c` / `bzm_bringup.c` implementations. ASIC TX encodes each 9-bit
@@ -171,9 +242,10 @@ issued no page/erase/program/commit commands. A subsequent full Anvil upload of
 The SHA256 of that normalized BIN was
 `e305990d370fac6485a89510f0ebc446de6baf60aa6920709d9592095df7d719`.
 Afterward the board reported TPS enable/PGOOD low, 5 V off, reset asserted,
-no trip, full fan command and zero domain taps. ASIC UART traffic and mining
-remain untested with ASIC power off; SWD availability alone is not a firmware
-startup or UART health check.
+no trip, full fan command and zero domain taps. The later I/O-only checks above
+verified NOOP and first-chip register access with core power off; full-chain
+assignment, PLLs and mining remain unverified. SWD availability alone is not a
+firmware startup or UART health check.
 SWD follows the [RP2040 debug/ROM interface](https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf);
 UF2 parsing follows the [UF2 format specification](https://github.com/microsoft/uf2).
 
@@ -238,6 +310,8 @@ TPS546 nonvolatile memory. The board was left with ASIC reset asserted, 5 V off,
 TPS output off, and the fan output set to full speed.
 
 The RP2040 has now been programmed with the adapted 1004x UART-only build from
-`~/Bitcoin/ESP-Miner/bonanza-bridge-fw`, as described above. Actual BZM2
-enumeration, clocking, telemetry and mining still need powered bench checks.
-Unit tests and flash readback do not establish that those ASIC paths work.
+`~/Bitcoin/ESP-Miner/bonanza-bridge-fw`, as described above. Core-off NOOP and
+first-chip address/register access passed bench checks. Core-off enumeration
+stops after the first chip; the user confirmed all four respond with VDD on.
+Clocking, telemetry and mining still need core-powered bench checks; unit tests
+and flash readback do not establish that those ASIC paths work.

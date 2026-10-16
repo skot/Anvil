@@ -52,7 +52,7 @@ class TPS546TelemetryTests(unittest.TestCase):
 
 
 class BonanzaProfileTests(unittest.TestCase):
-    def test_profile_emits_fork_register_values(self):
+    def test_profile_emits_bonanza_register_values(self):
         from contextlib import redirect_stdout
         from io import StringIO
         from tps546D24_values import TPS546_CONFIG_BONANZA
@@ -72,7 +72,7 @@ class BonanzaProfileTests(unittest.TestCase):
         self.assertEqual(words[p.PMBUS_IOUT_CAL_GAIN], 0xC880)
         self.assertEqual(words[p.PMBUS_IOUT_CAL_OFFSET], 0xE000)
         self.assertIn(mock.call(None, p.PMBUS_ON_OFF_CONFIG, 0x1B), byte.call_args_list)
-        self.assertIn(mock.call(None, p.PMBUS_COMPENSATION_CONFIG, [0x13, 0x11, 0x8C, 0x1D, 6], 5), block.call_args_list)
+        self.assertIn(mock.call(None, p.PMBUS_COMPENSATION_CONFIG, [0x13, 0x11, 0x8C, 0x1D, 0x08], 5), block.call_args_list)
         self.assertIn(mock.call(None, p.PMBUS_TELEMETRY_CONFIG, [3, 3, 3, 3, 3, 0], 6), block.call_args_list)
 
     def test_vout_uses_regulator_exponent(self):
