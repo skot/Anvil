@@ -176,12 +176,47 @@ is the all-ASIC write address. NOOP returns `2ZB` on the wire.
 
 This is a bringup console, not a full pool miner. MC3-specific mining/PLL/SPDLOG
 menus are replaced with BZM2 operations. The genesis nonce correction defaults
-to `0x4C` from the fork's 1002 profile and must be verified on 1004x. Startup
+to `0x4C` from the fork's 1002 profile, now verified on 1004x unit #2 at 800 MHz. Startup
 PLL programming and sensor reads are implemented; full-chip ramping, sustained
 hashrate measurement, TDM mining and version rolling are not implemented.
 Legacy `mc3.py` and its isolated tests remain as reference and are not imported
 by Anvil. The old dedicated bonanzaDisplay page is not exposed by this firmware;
 its helper rejects writes rather than accidentally sending fan commands.
+
+## Powered PLL and genesis qualification
+
+After enabling the 2.8 V core rail, use ASIC menu **1** to enumerate, **3** to
+configure/read sensors, **4** to program both PLL domains at 800 MHz, then **9**
+for the bounded genesis test. Sensor CH0/CH1 each measure an internal
+half-domain (nominally about 0.355 V); the hashing precheck accepts
+0.25–0.425 V per channel, alongside temperature and fault/trip checks.
+
+The genesis test activates only physical engine groups 0 and 10 on each ASIC,
+one in each internal voltage domain. It loads four identical genesis midstates
+and four distinct sequence tags before activation, as required by the enhanced
+mode sequence in datasheet 8.1.9.1. Timestamp rolling and continuous looping
+remain disabled. Its counter window is within 128 counts of `0x1DAC2B7C`, the
+word-swapped representation of the Bitcoin genesis nonce.
+
+Results are read directly from each selected engine's offsets `0x70..0x77`,
+with the FIFO pop read last and autonomous collection frozen, following
+datasheet 8.1.9.2. Each result must have a valid flag, matching logical sequence,
+zero timestamp offset, and a corrected nonce that reproduces the genesis
+double-SHA256 hash. Correction subtracts `0x4C` in ASIC counter order, then swaps
+the bytes to obtain Bitcoin nonce `0x7C2BAC1D` (2083236893).
+
+On 2026-10-16, unit **#2** (USB serial `72dfdc12`, ESP firmware 0.0.3) passed
+all eight PLL lock/readback checks at 800 MHz and produced a verified genesis
+result from all eight selected engine groups. Each raw nonce was `0x1DAC2BC8`;
+returned subjob tags were recorded. Post-test ASIC temperatures were
+27.1–27.7 °C, with no sensor faults or trips. Cleanup verified core VDD and 5 V
+off, reset asserted, PGOOD low, and zero stack taps.
+
+This establishes the selected engine groups' bounded known-answer operation.
+It does not qualify every TCE/subjob, the full chip, sustained hashrate, or TDM
+result delivery. The ASIC-level `ReadResult` opcode returned no packet during
+these checks; its collection path remains unqualified. The smoke test uses the
+verified direct engine-FIFO path instead.
 
 ## Load RP2040 bridge firmware from Anvil
 
@@ -313,5 +348,6 @@ The RP2040 has now been programmed with the adapted 1004x UART-only build from
 `~/Bitcoin/ESP-Miner/bonanza-bridge-fw`, as described above. Core-off NOOP and
 first-chip address/register access passed bench checks. Core-off enumeration
 stops after the first chip; the user confirmed all four respond with VDD on.
-Clocking, telemetry and mining still need core-powered bench checks; unit tests
-and flash readback do not establish that those ASIC paths work.
+Subsequent unit #2 clocking, telemetry and bounded hashing checks passed as
+described above. Full-chip and sustained mining still need powered qualification;
+unit tests and flash readback alone do not establish those paths work.

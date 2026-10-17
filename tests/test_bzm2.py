@@ -89,17 +89,28 @@ class BZM2Tests(unittest.TestCase):
         self.assertLess(sample['ch2_v'], 0)
 
     def test_result_decode_and_genesis_double_sha_validation(self):
-        nonce = bzm2.GENESIS_NONCE + 0x4C
-        serial = FakeSerial(bytes.fromhex('0a 01 80 0a') + struct.pack('<I', nonce) + b'\x07\0')
+        nonce = bzm2.GENESIS_COUNTER_NONCE + 0x4C
+        serial = FakeSerial(bytes.fromhex('0a 01 80 0a') + struct.pack('<I', nonce) + bytes([(7 << 2) | 2, 0]))
         result = bzm2.read_result(serial, 10)
         self.assertEqual(serial.writes, [bytes.fromhex('0a 01 10 00')])
         self.assertEqual(result['engine'], 10)
         self.assertTrue(bzm2.validate_genesis_result(result, 7))
         self.assertFalse(bzm2.validate_genesis_result(result, 8))
         self.assertFalse(bzm2.validate_genesis_result(result, 7, nonce_offset=0x28))
+        self.assertFalse(bzm2.validate_genesis_result(dict(result, nonce=bzm2.GENESIS_NONCE + 0x4C), 7))
         self.assertEqual(len(bzm2.GENESIS_HEADER), 80)
         self.assertEqual(hashlib.sha256(hashlib.sha256(bzm2.GENESIS_HEADER).digest()).digest()[::-1].hex(),
                          '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f')
+
+    def test_engine_fifo_reads_nonce_before_pop_and_validates_genesis(self):
+        data = bytes([9, 4, 0]) + struct.pack('<I', bzm2.GENESIS_COUNTER_NONCE + 0x4C) + b'\1'
+        serial = FakeSerial(b'\x0a\x03' + data, fragment=1)
+        result = bzm2.read_engine_result(serial, 10, 0)
+        self.assertTrue(bzm2.validate_genesis_result(result, 1))
+        self.assertEqual(serial.writes, [bytes.fromhex('0a 01 30 00 00 00 70 00 07 00 00 00')])
+        self.assertFalse(bzm2.read_engine_result(FakeSerial(b'\x0a\x03'+b'\0'*8), 10, 0)['valid'])
+        with self.assertRaisesRegex(RuntimeError, 'not popped'):
+            bzm2.read_engine_result(FakeSerial(b'\x0a\x03'+data[:-1]+b'\0'), 10, 0)
 
     def test_genesis_work_wire_order_and_bounded_balanced_activation(self):
         with patch.object(bzm2, 'write_verified'), patch.object(bzm2, 'write_register') as write:
@@ -107,12 +118,21 @@ class BZM2Tests(unittest.TestCase):
         calls = [c.args for c in write.call_args_list]
         self.assertEqual([(c[2], c[3], c[4]) for c in calls[-2:]], [(0x39, b'\3', 10), (0x39, b'\3', 0)])
         for engine in (0, 10):
-            values = {c[2]: c[3] for c in calls[:-2] if c[4] == engine}
+            engine_calls = [c for c in calls[:-2] if c[4] == engine]
+            values = {c[2]: c[3] for c in engine_calls}
             self.assertEqual(values[0x48], b'\0')  # looping disabled
             self.assertEqual(values[0x30], bytes.fromhex('4a5e1e4b'))
             self.assertEqual(values[0x34], bytes.fromhex('495fab29'))
             self.assertEqual(values[0x44], bytes.fromhex('1d00ffff'))
             self.assertLess(int.from_bytes(values[0x40], 'little') - int.from_bytes(values[0x3C], 'little'), 300)
+            self.assertLess(int.from_bytes(values[0x3C], 'little'), bzm2.GENESIS_COUNTER_NONCE)
+            self.assertGreater(int.from_bytes(values[0x40], 'little'), bzm2.GENESIS_COUNTER_NONCE)
+            self.assertEqual(bzm2.GENESIS_COUNTER_NONCE, 0x1DAC2B7C)
+            fifo = [(c[2], c[3]) for c in engine_calls if c[2] in (0x10, 0x38)]
+            self.assertEqual(fifo, [(0x10, bzm2.GENESIS_MIDSTATE)] * 4 +
+                             [(0x38, bytes([(7 << 2) | variant])) for variant in range(4)])
+        with self.assertRaises(ValueError):
+            bzm2.start_genesis_test(None, [10], 64)
 
 
 if __name__ == '__main__':

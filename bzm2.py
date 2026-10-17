@@ -225,7 +225,10 @@ GENESIS_HEADER = bytes.fromhex(
 GENESIS_MIDSTATE = bytes.fromhex(
     '339a90bcf0bf58637daccc90a8ca591ee9d8c8c3c803014f3687b1961bf91947')
 GENESIS_NONCE = 2083236893
+# BZM counters use the per-word-swapped header order; Bitcoin uses LE nonce.
+GENESIS_COUNTER_NONCE = int.from_bytes(GENESIS_HEADER[76:80], 'big')
 SMOKE_ENGINES = (0, 10)  # column 0, row 0 (bottom) and row 10 (top)
+GENESIS_VARIANTS = 4  # Enhanced mode requires four FIFO entries before activation.
 
 
 def start_genesis_test(ser, chip_ids, sequence=1, debug=False):
@@ -234,23 +237,30 @@ def start_genesis_test(ser, chip_ids, sequence=1, debug=False):
     No version/timestamp rolling, continuous looping, or full-chip activation.
     Returns results around the known genesis nonce; no pool connection needed.
     """
-    _range('sequence', sequence, 0, 255)
+    _range('sequence', sequence, 0, 63)
     for address in chip_ids:
-        # Autonomous result collection, non-TDM. TX mask permits polled replies.
+        # Freeze autonomous collection: this smoke test owns the selected
+        # engine FIFOs and reads/pops them directly (datasheet 8.1.9.2).
         write_verified(ser, address, 0x00, 1, debug)
         write_verified(ser, address, 0x0A, 0x0F, debug)
         for engine in SMOKE_ENGINES:
             write_register(ser, address, 1, b'\x04', engine, debug)
             write_register(ser, address, 0x39, b'\x02', engine, debug)
             values = ((0x49, b'\0'), (0x48, b'\0'),
-                      (0x3C, struct.pack('<I', (GENESIS_NONCE - 128) & ~1)),
-                      (0x40, struct.pack('<I', (GENESIS_NONCE + 128) & ~1)),
+                      (0x3C, struct.pack('<I', (GENESIS_COUNTER_NONCE - 128) & ~1)),
+                      (0x40, struct.pack('<I', (GENESIS_COUNTER_NONCE + 128) & ~1)),
                       (0x30, GENESIS_HEADER[64:68][::-1]),
                       (0x34, GENESIS_HEADER[68:72][::-1]),
-                      (0x44, GENESIS_HEADER[72:76][::-1]),
-                      (0x10, GENESIS_MIDSTATE), (0x38, bytes([sequence])))
+                      (0x44, GENESIS_HEADER[72:76][::-1]))
             for offset, data in values:
                 write_register(ser, address, offset, data, engine, debug)
+            # Datasheet 8.1.9.1: starting before all four enhanced-mode jobs
+            # have been loaded drops the job. Keep the header identical and
+            # tag each copy with its two-bit variant; no version rolling.
+            for _ in range(GENESIS_VARIANTS):
+                write_register(ser, address, 0x10, GENESIS_MIDSTATE, engine, debug)
+            for variant in range(GENESIS_VARIANTS):
+                write_register(ser, address, 0x38, bytes([(sequence << 2) | variant]), engine, debug)
         # Program both domains before activating the pair.
         for engine in (10, 0):
             write_register(ser, address, 0x39, b'\x03', engine, debug)
@@ -276,11 +286,29 @@ def read_result(ser, address, debug=False):
             'sequence': response[8], 'time': response[9]}
 
 
+def read_engine_result(ser, address, engine, debug=False):
+    """Read a stable engine result and pop it last, with autonomous reads frozen.
+
+    Engine offsets 0x70..0x77 contain valid, sequence, time, LE nonce, and
+    read-to-pop. The nonce fields stay stable until the final pop byte.
+    """
+    _range('engine ID', engine, 0, 0xEFF)
+    data = read_register(ser, address, 0x70, 8, engine, debug)
+    valid = bool(data[0] & 1)
+    if valid and not data[7] & 1:
+        raise RuntimeError(f'ASIC {address:02X} engine {engine}: valid result was not popped')
+    return {'asic': address, 'engine': engine,
+            'status': (8 if valid else 0) | (1 if data[0] & 8 else 0),
+            'valid': valid, 'nonce': int.from_bytes(data[3:7], 'little'),
+            'sequence': data[1], 'time': data[2]}
+
+
 def validate_genesis_result(result, sequence, nonce_offset=0x4C):
-    """0x4C offset comes from the fork's 1002 profile; verify it on 1004x."""
-    nonce = (result['nonce'] - nonce_offset) & 0xFFFFFFFF
+    """0x4C from the reference fork is verified on unit #2's 800 MHz smoke test."""
+    counter_nonce = (result['nonce'] - nonce_offset) & 0xFFFFFFFF
+    nonce = int.from_bytes(counter_nonce.to_bytes(4, 'little'), 'big')
     header = GENESIS_HEADER[:76] + struct.pack('<I', nonce)
     digest = hashlib.sha256(hashlib.sha256(header).digest()).digest()
-    return (result['valid'] and result['sequence'] == sequence and result['time'] == 0 and
+    return (result['valid'] and result['sequence'] >> 2 == sequence and result['time'] == 0 and
             result['engine'] in SMOKE_ENGINES and nonce == GENESIS_NONCE and
             digest[::-1].hex() == '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f')

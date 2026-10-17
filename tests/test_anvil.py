@@ -98,5 +98,57 @@ class AnvilBoardTests(unittest.TestCase):
                                                bytes.fromhex('07 00 a5 00 06 01 00')])
 
 
+class GenesisSensorPrecheckTests(unittest.TestCase):
+    def run_genesis(self, sensor):
+        app = Anvil.Anvil('ctrl', 'asic', 115200, 2000000, 3)
+        app.bzm_chip_ids = [10, 20, 30, 40]
+        app.bzm_clocks_verified = app.bzm_sensors_configured = True
+        app.require_chain = lambda: object()
+        results = []
+        for address in app.bzm_chip_ids:
+            for engine in Anvil.bzm2.SMOKE_ENGINES:
+                results.append({'asic': address, 'engine': engine, 'valid': True,
+                                'nonce': Anvil.bzm2.GENESIS_COUNTER_NONCE + 0x4C,
+                                'sequence': 4 | (engine % 4), 'time': 0})
+        with patch('Anvil.confirm', return_value=True), \
+             patch('Anvil.prompt_int', return_value=0x4C), patch('builtins.print'), \
+             patch('bzm2.read_sensors', return_value=sensor), \
+             patch('bzm2.start_genesis_test') as start, patch('bzm2.stop_genesis_test'), \
+             patch('bzm2.read_engine_result', side_effect=results):
+            try:
+                app.bzm_genesis_test()
+            except RuntimeError:
+                start.assert_not_called()
+                raise
+            start.assert_called_once()
+
+    def sensor(self, **changes):
+        return dict(temperature_c=30, ch0_v=0.35, ch1_v=0.36,
+                    thermal_fault=False, thermal_trip=False,
+                    voltage_fault=False, voltage_trip=False, **changes)
+
+    def test_normal_half_domain_voltages_allow_verified_genesis_results(self):
+        self.run_genesis(self.sensor())
+
+    def test_bad_half_domain_voltages_prevent_hashing(self):
+        for channel in ('ch0_v', 'ch1_v'):
+            for voltage in (0.24, 0.426, 0.7):
+                sensor = self.sensor()
+                sensor[channel] = voltage
+                with self.subTest(channel=channel, voltage=voltage), \
+                     self.assertRaisesRegex(RuntimeError, 'sensor precheck'):
+                    self.run_genesis(sensor)
+
+    def test_faults_and_temperature_prevent_hashing(self):
+        for key, value in [('thermal_fault', True), ('thermal_trip', True),
+                           ('voltage_fault', True), ('voltage_trip', True),
+                           ('temperature_c', 85), ('temperature_c', 0)]:
+            sensor = self.sensor()
+            sensor[key] = value
+            with self.subTest(key=key, value=value), \
+                 self.assertRaisesRegex(RuntimeError, 'sensor precheck'):
+                self.run_genesis(sensor)
+
+
 if __name__ == '__main__':
     unittest.main()

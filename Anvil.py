@@ -625,12 +625,12 @@ class Anvil:
         asic = self.require_chain()
         if not self.bzm_clocks_verified or not self.bzm_sensors_configured:
             raise RuntimeError("Configure sensors and set/verify PLLs before the mining test")
-        offset = prompt_int("Nonce correction (0x4C from fork's 1002 profile; verify on 1004x)",
+        offset = prompt_int("Nonce correction (0x4C verified at 800 MHz on 1004x unit #2)",
                             default=0x4C, minimum=0, maximum=255)
-        print("Tests one bottom/top engine pair per chip, over 256 nonces around the genesis solution.")
+        print("Tests one bottom/top engine pair per chip, over a bounded nonce window around the genesis solution.")
         if not confirm("Run bounded BZM2 genesis test?"):
             return
-        self.bzm_sequence = self.bzm_sequence % 255 + 1
+        self.bzm_sequence = self.bzm_sequence % 63 + 1
         sequence = self.bzm_sequence
         verified = set()
         try:
@@ -638,18 +638,25 @@ class Anvil:
                 sample = bzm2.read_sensors(asic, address, self.debug)
                 if (sample['thermal_fault'] or sample['thermal_trip'] or sample['voltage_fault'] or
                         sample['voltage_trip'] or not 0 < sample['temperature_c'] < 85 or
-                        not all(0.5 <= sample[k] <= 0.85 for k in ('ch0_v', 'ch1_v'))):
+                        # CH0/CH1 each measure an internal half-domain (~0.355 V).
+                        not all(0.25 <= sample[k] <= 0.425 for k in ('ch0_v', 'ch1_v'))):
                     raise RuntimeError(f"ASIC {address:02X}: sensor precheck failed: {sample}")
             bzm2.start_genesis_test(asic, self.bzm_chip_ids, sequence, self.debug)
             for address in self.bzm_chip_ids:
-                for _ in range(8):
-                    result = bzm2.read_result(asic, address, self.debug)
-                    if not result['valid']:
-                        break
-                    valid = bzm2.validate_genesis_result(result, sequence, offset)
-                    print(f"{result} genesis_verified={valid}")
-                    if valid:
-                        verified.add((address, result['engine']))
+                for engine in bzm2.SMOKE_ENGINES:
+                    deadline = time.monotonic() + 2.0
+                    for _ in range(24):
+                        result = bzm2.read_engine_result(asic, address, engine, self.debug)
+                        if not result['valid']:
+                            if time.monotonic() >= deadline:
+                                break
+                            time.sleep(0.01)
+                            continue
+                        valid = bzm2.validate_genesis_result(result, sequence, offset)
+                        print(f"{result} genesis_verified={valid}")
+                        if valid:
+                            verified.add((address, engine))
+                            break
             expected = {(a, e) for a in self.bzm_chip_ids for e in bzm2.SMOKE_ENGINES}
             print(f"Genesis results verified: {len(verified)}/{len(expected)} engines")
             if verified != expected:
