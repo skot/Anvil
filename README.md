@@ -2,7 +2,7 @@
 
 Interactive Python bringup console for four BZM2 (Intel Blockscale) ASICs on
 bitaxeBonanza-1004x. Requires the matching **1004x version** of
-`bitaxe-raw-bonanza` on the ESP32 and a programmed RP2040 ASIC UART bridge.
+[bitaxe-raw-bonanza](https://github.com/bitaxeorg/bitaxe-raw/tree/bonanza) on the ESP32 and a programmed RP2040 ASIC UART bridge.
 Board I2C, fan, reset, trip, 5 V enable and domain ADCs are handled by the ESP32.
 The RP2040 is used for the ASIC 9-bit UART data path.
 
