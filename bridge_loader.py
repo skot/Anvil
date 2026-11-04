@@ -144,6 +144,11 @@ def program(ser, image, progress=None, debug=False):
     """
     validate_binary(image.data)
     capabilities(ser, debug)
+    _program(ser, image, PAGE_SWD, HEADER_SIZE, progress, debug)
+
+
+def _program(ser, image, page, header_size, progress=None, debug=False):
+    """Shared ordered upload after target-specific validation/capabilities."""
     original_timeout = ser.timeout
     original_write_timeout = ser.write_timeout
     maintenance_started = False
@@ -164,20 +169,20 @@ def program(ser, image, progress=None, debug=False):
             if time.monotonic() >= deadline:
                 raise RuntimeError('TPS546 PGOOD is still high; wait for the rail to discharge')
             time.sleep(0.05)
-        payload = struct.pack('<II', len(image.data), image.crc32) + image.data[:HEADER_SIZE]
+        payload = struct.pack('<II', len(image.data), image.crc32) + image.data[:header_size]
         maintenance_started = True  # BEGIN might reach the ESP32 even if its reply is lost.
-        data = bitaxeraw.control_command(ser, 0xF2, PAGE_SWD, 0x10, payload, debug)
+        data = bitaxeraw.control_command(ser, 0xF2, page, 0x10, payload, debug)
         _progress_reply(data, 0, 0)
         crc = 0
         for offset in range(0, len(image.data), PAGE_SIZE):
             chunk = image.data[offset:offset + PAGE_SIZE]
             crc = zlib.crc32(chunk, crc)
-            data = bitaxeraw.control_command(ser, 0xF3, PAGE_SWD, 0x20,
+            data = bitaxeraw.control_command(ser, 0xF3, page, 0x20,
                                              struct.pack('<I', offset) + chunk, debug)
             _progress_reply(data, offset + len(chunk), crc)
             if progress:
                 progress(offset + len(chunk), len(image.data))
-        data = bitaxeraw.control_command(ser, 0xF4, PAGE_SWD, 0x30, debug=debug)
+        data = bitaxeraw.control_command(ser, 0xF4, page, 0x30, debug=debug)
         _progress_reply(data, len(image.data), image.crc32)
         maintenance_started = False
     finally:
@@ -186,7 +191,7 @@ def program(ser, image, progress=None, debug=False):
             # after an uncertain outcome. Disconnect also cancels maintenance.
             try:
                 ser.reset_input_buffer()
-                bitaxeraw.control_command(ser, 0xF5, PAGE_SWD, 0x7F, debug=debug)
+                bitaxeraw.control_command(ser, 0xF5, page, 0x7F, debug=debug)
             except (OSError, RuntimeError):
                 ser.close()
         ser.timeout = original_timeout

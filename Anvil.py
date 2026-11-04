@@ -10,6 +10,7 @@ import time
 import bitaxeraw
 import bonanza_display
 import bridge_loader
+import display_loader
 import bzm2
 import TPS546D24
 import tps546D24_values
@@ -672,12 +673,14 @@ class Anvil:
 
     def display_menu(self):
         while True:
-            print("\nBonanzaDisplay-v3 (UART BAP)")
+            print("\nBonanzaDisplay-v3 (UART BAP / ESP32 SWD)")
             print("  1) Probe UART and observe display requests")
             print("  2) Show configured host values")
             print("  3) Send/configure a displayed field")
             print("  4) Serve demo values (synthetic, not measured telemetry)")
             print("  5) Serve configured values and handle subscriptions")
+            print("  6) Probe RP2354A SWD")
+            print("  7) Load RP2354A display firmware (.bin/.uf2)")
             print("  b) Back")
             choice = input("Display> ").strip().lower()
             if choice in ("b", "back", "q"):
@@ -705,6 +708,12 @@ class Anvil:
                     self.display_demo()
                 elif choice == "5":
                     self.display_serve()
+                elif choice == "6":
+                    ctrl = self.require_control()
+                    if ctrl:
+                        print(f"RP2354A SWD DPIDR: 0x{display_loader.probe(ctrl, self.debug):08X}")
+                elif choice == "7":
+                    self.load_display_firmware()
                 else:
                     print("Unknown option")
             except (OSError, RuntimeError, ValueError) as exc:
@@ -775,19 +784,25 @@ class Anvil:
             else:
                 print("Unknown option")
 
-    def load_bridge_firmware(self, path=None, assume_yes=False):
+    def load_display_firmware(self, path=None, assume_yes=False):
+        return self.load_bridge_firmware(path, assume_yes, display=True)
+
+    def load_bridge_firmware(self, path=None, assume_yes=False, display=False):
+        loader = display_loader if display else bridge_loader
+        label = "Display" if display else "Bridge"
+        target = "RP2354A display" if display else "RP2040 bridge"
         if path is None:
-            path = input("Bridge firmware .bin/.uf2 path: ").strip()
+            path = input(f"{label} firmware .bin/.uf2 path: ").strip()
         # Validate the entire file before opening SWD or disabling any rail.
-        image = bridge_loader.FirmwareImage.load(path)
-        print(f"Bridge image: {image.path}")
+        image = loader.FirmwareImage.load(path)
+        print(f"{label} image: {image.path}")
         print(f"Flash bytes: {len(image.data)}; CRC32: {image.crc32:08X}")
         print(f"Flash-image SHA256: {image.sha256}")
         ctrl = self.require_control()
         if not ctrl:
             return False
-        print(f"RP2040 SWD DPIDR: 0x{bridge_loader.probe(ctrl, self.debug):08X}")
-        if not assume_yes and not confirm("Replace RP2040 bridge firmware with this image?"):
+        print(f"{target} SWD DPIDR: 0x{loader.probe(ctrl, self.debug):08X}")
+        if not assume_yes and not confirm(f"Replace {target} firmware with this image?"):
             return False
         if self.asic and self.asic.is_open:
             self.asic.close()
@@ -800,11 +815,11 @@ class Anvil:
             nonlocal last_percent
             percent = done * 100 // total
             if percent >= last_percent + 5 or done == total:
-                print(f"Bridge flash: {done}/{total} bytes ({percent}%) verified")
+                print(f"{label} flash: {done}/{total} bytes ({percent}%) verified")
                 last_percent = percent
 
-        bridge_loader.program(ctrl, image, progress=progress, debug=self.debug)
-        print("RP2040 flash readback verified and target reset. TPS output and 5 V remain off.")
+        loader.program(ctrl, image, progress=progress, debug=self.debug)
+        print(f"{target} flash readback verified and target reset. TPS output and 5 V remain off.")
         print("Initialize/enable the TPS and enumerate the BZM2 chain before mining.")
         return True
 
@@ -1079,6 +1094,8 @@ def parse_args(argv):
     mode.add_argument("--probe", action="store_true", help="Read ESP32 board diagnostics and exit without enabling power")
     mode.add_argument("--bridge-probe", action="store_true", help="Probe the RP2040 over ESP32 SWD without flashing")
     mode.add_argument("--flash-bridge", metavar="FILE", help="Load an RP2040 .bin/.uf2 through ESP32 SWD and exit")
+    mode.add_argument("--display-swd-probe", action="store_true", help="Probe the display RP2354A through ESP32 SWD without flashing")
+    mode.add_argument("--flash-display", metavar="FILE", help="Load an RP2354A display .bin/.uf2 through ESP32 SWD and exit")
     mode.add_argument("--display-probe", action="store_true", help="Observe a bonanzaDisplay BAP request over UART and exit")
     mode.add_argument("--display-serve", action="store_true", help="Serve configured BAP values and display subscriptions")
     mode.add_argument("--display-demo", action="store_true", help="Serve synthetic demo values to bonanzaDisplay over UART BAP")
@@ -1090,14 +1107,14 @@ def parse_args(argv):
                         help="Bound display serving/probe duration; default: serve until Ctrl-C, probe for 15 seconds")
     parser.add_argument("--chips", type=int, choices=range(1, 5), default=4,
                         help="Expected chips for --bzm-io-test assign (default: 4)")
-    parser.add_argument("--yes", action="store_true", help="Confirm the selected bridge flash or BZM2 I/O test without prompting")
+    parser.add_argument("--yes", action="store_true", help="Confirm the selected bridge/display flash or BZM2 I/O test without prompting")
     args = parser.parse_args(argv)
     if not math.isfinite(args.display_seconds) or args.display_seconds < 0:
         parser.error("--display-seconds must be a finite nonnegative number")
-    if args.display_set and (args.probe or args.bridge_probe or args.flash_bridge or args.bzm_io_test or args.display_probe):
+    if args.display_set and (args.probe or args.bridge_probe or args.flash_bridge or args.flash_display or args.display_swd_probe or args.bzm_io_test or args.display_probe):
         parser.error("--display-set can only be used alone, with --display-serve or with --display-demo")
-    if args.yes and not (args.flash_bridge or args.bzm_io_test):
-        parser.error("--yes requires --flash-bridge FILE or --bzm-io-test")
+    if args.yes and not (args.flash_bridge or args.flash_display or args.bzm_io_test):
+        parser.error("--yes requires --flash-bridge FILE, --flash-display FILE or --bzm-io-test")
     return args
 
 
@@ -1112,6 +1129,13 @@ def main(argv=None):
         debug=args.debug,
     )
     try:
+        if args.flash_display or args.display_swd_probe:
+            if not app.connect_control():
+                return 1
+            if args.display_swd_probe:
+                print(f"RP2354A SWD DPIDR: 0x{display_loader.probe(app.ctrl, args.debug):08X}")
+                return 0
+            return 0 if app.load_display_firmware(args.flash_display, assume_yes=args.yes) else 1
         if args.display_probe or args.display_serve or args.display_demo or args.display_set:
             values = dict(args.display_set or [])
             if args.display_probe:
@@ -1139,7 +1163,7 @@ def main(argv=None):
         return app.run()
     except (KeyboardInterrupt, EOFError):
         print("\nExiting Anvil.")
-        return 130 if args.bzm_io_test else 0
+        return 130 if args.bzm_io_test or args.flash_bridge or args.flash_display else 0
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Anvil operation failed: {exc}")
         return 1

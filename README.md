@@ -207,8 +207,80 @@ The physical link is **115200 baud, 8N1, no flow control, 3.3 V logic**:
 | Display TX → host RX (`DISP_RX`) | GPIO40 / UART0 RX | 4 | 9 | GPIO20 / UART1 TX |
 
 The pin names are host-relative, and the 12-pin FFC reverses connector numbering.
-The display must already run the matching v3 BAP firmware. The separate RP2040
-bridge loader is not a display programmer.
+The display must run the matching v3 BAP firmware. Anvil can install it using
+the separate RP2354A SWD loader described below.
+
+### Program the RP2354A through the ESP32
+
+ESP32 firmware **bitaxe-raw-bonanza/1004x/0.0.5** adds display SWD on control
+page `0x0C`. Main menu **9 → 6** probes SWD; **9 → 7** loads display firmware.
+The UART probe remains **9 → 1**, or `--display-probe`.
+
+```bash
+./Anvil.py --display-swd-probe
+./Anvil.py --flash-display ~/Bitcoin/ESP-Miner/bonanzaDisplay-fw/build-v3-rp2354a/bonanzaDisplay.uf2
+# Skip the interactive confirmation for this explicitly selected image:
+./Anvil.py --flash-display /absolute/path/to/bonanzaDisplay.bin --yes
+```
+
+| Signal | ESP32 | Host J5 | Display J5 | RP2354A U1 |
+| --- | --- | --- | --- | --- |
+| Shared SWCLK | GPIO14 | 1 | 12 | 24 |
+| Display SWDIO | GPIO16 | 2 | 11 | 25 |
+
+These connections were checked against exported saved netlists of
+bitaxeBonanza-1004x and bonanzaDisplay-v3. Bridge SWDIO stays on GPIO15; only
+one target owns the shared clock, and the inactive SWDIO pin remains an input.
+Connect the display through the FFC and keep its 3.3 V supply present. Display
+USB is not used for this upload.
+
+Use the RP2354A v3 build (`pico2`, `rp2350-arm-s`,
+`PICO_FLASH_SIZE_BYTES=2097152`). The loader accepts complete, unpartitioned
+Pico SDK Arm Secure BIN/UF2 images with vectors at offset zero and a simple
+IMAGE_DEF in the first 512 bytes. It rejects RP2040/RISC-V/Non-secure UF2
+families and addresses outside the RP2354A's 2 MiB internal flash. The SDK's
+leading RP2350 E10 compatibility UF2 block is recognized and skipped; it is
+never sent to flash. UF2 padding means its normalized CRC/SHA can differ from
+the BIN. No OTP or debug-security settings are programmed.
+
+Anvil shows size/CRC32/SHA256 before confirmation, closes ASIC serial, invalidates
+managed ASIC state, and disables TPS conversion, TPS enable and ASIC 5 V.
+The ESP32 halts both display cores, stops DMA/PIO/watchdog, verifies an uploaded
+SRAM ROM-call trampoline, and then erases/programs ordered 256-byte pages.
+Each page is compared with flash readback, and progress CRCs use those readback
+bytes. Reset happens only after the complete byte count and whole-image CRC
+match. The RP2040 bridge image is not rewritten. ASIC power stays off afterward.
+
+Failure, interruption or USB disconnect releases the SWD pins without
+deliberately booting a partial display image. Retry the complete upload from
+offset zero; uncertain page/commit replies are not automatically retried.
+Even BEGIN/ABORT halts the display and overwrites scratch SRAM; ABORT does not
+resume its old application. A successful upload/reset or display power cycle
+is needed to run it again. The probe only reads the debug port, without halting.
+
+The implementation follows Raspberry Pi's
+[RP2350 debug/boot ROM documentation](https://datasheets.raspberrypi.com/rp2350/rp2350-datasheet.pdf),
+[Pico SDK ROM API](https://github.com/raspberrypi/pico-sdk/blob/master/src/rp2_common/pico_bootrom/include/pico/bootrom.h),
+and [RP2350 OpenOCD target mapping](https://github.com/raspberrypi/openocd/blob/master/tcl/target/rp2350.cfg).
+
+On **2026-11-04**, this path was tested on unit #2 (ESP MAC
+`68:ee:8f:53:88:94`, control USB serial `72dfdc12`) after installing ESP
+firmware 0.0.5. Display DPIDR was `0x4C013477`; bridge DPIDR remained
+`0x0BC12477`. A display BEGIN/ABORT verified both-core halt, SRAM upload/readback
+and ROM initialization without a flash command. A bridge probe and a 5 V enable
+request were both denied during that display session.
+
+Anvil then programmed `build-v3-rp2354a/bonanzaDisplay.bin`: **485,172 bytes**,
+readback CRC32 **`EC7B1697`**, SHA256
+`33ea60ba1ee5da42267e94db579d814e92a16a54f418e32b1ce50b4627813342`.
+Every page and the final CRC passed before reset. The restarted display sent
+BAP `REQ,systemInfo`. A separate `picotool verify` over the display's connected
+USB also compared the entire BIN successfully and returned it to application
+mode; USB was used only for this independent check, not the upload. The board
+was left with ASIC reset asserted, 5 V/TPS/PGOOD off, PMBus OPERATION off, no
+trip, full fan command, and zero domain taps. Screen rendering was not visually
+inspected. Host tests (129), firmware pure-logic tests (16), and the release
+firmware build passed. Local logs are under `local/display-swd/`.
 
 ### Using the BAP host
 
