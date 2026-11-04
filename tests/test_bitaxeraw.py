@@ -107,10 +107,10 @@ class BonanzaControlTests(unittest.TestCase):
 
     def test_display_cannot_accidentally_send_fan_commands(self):
         serial = FakeSerial()
-        with self.assertRaisesRegex(RuntimeError, 'no dedicated DISP'):
-            bonanza_display.write_field(serial, 0xAE, 'hashrate_ghs', 1200)
+        with self.assertRaisesRegex(RuntimeError, 'UART BAP'):
+            bitaxeraw.disp_write(serial, 0xAE, 0x3C, 0x60, (1200).to_bytes(4, 'little'))
         self.assertEqual(serial.writes, [])
-        self.assertEqual(bonanza_display.encode_field('best_share', '123T'), b'123T\0')
+        self.assertEqual(bonanza_display.encode_field('best_share', '123T'), b'$BAP,RES,best_difficulty,123T*13\r\n')
 
     def test_asymmetric_asic_transport(self):
         serial = FakeSerial(b'\xfa\x0f2ZB', fragment=1)

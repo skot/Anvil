@@ -132,7 +132,7 @@ def chip_voltages_from_taps(taps, total_vout):
 
 
 def disp_write(ser, id, address, register, data, debug=False):
-    raise RuntimeError('bitaxe-raw-bonanza has no dedicated DISP page; page 0x09 is a fan compatibility page')
+    raise RuntimeError('BonanzaDisplay-v3 uses UART BAP, not register writes; page 0x09 controls the fan')
 
 
 def asic_write(ser, data, debug=False):

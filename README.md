@@ -180,8 +180,116 @@ to `0x4C` from the fork's 1002 profile, now verified on 1004x unit #2 at 800 MHz
 PLL programming and sensor reads are implemented; full-chip ramping, sustained
 hashrate measurement, TDM mining and version rolling are not implemented.
 Legacy `mc3.py` and its isolated tests remain as reference and are not imported
-by Anvil. The old dedicated bonanzaDisplay page is not exposed by this firmware;
-its helper rejects writes rather than accidentally sending fan commands.
+by Anvil. BonanzaDisplay-v3 uses UART BAP on its own ESP32 control page `0x0B`;
+page `0x09` remains the fan compatibility API.
+
+## BonanzaDisplay-v3
+
+Main menu **9) BonanzaDisplay-v3** supports the v3 display firmware's **UART
+Bitaxe Accessory Protocol (BAP)**. The display initiates requests/subscriptions;
+Anvil acts as the host and supplies individual `RES` fields. The implementation
+matches `~/Bitcoin/ESP-Miner/bonanzaDisplay-fw/README.md` and
+`src/control/bap_client.c`. The previous v2 I2C register protocol is unsupported.
+
+### Required ESP32 firmware
+
+Build and flash the updated **bitaxe-raw-bonanza/1004x/0.0.4** (or a later build
+with display page `0x0B`) from `~/Bitcoin/bitaxe-raw/bitaxe-raw-bonanza`.
+The earlier 0.0.3 build does not expose the display UART. Anvil checks transport
+capabilities before sending BAP frames and reports the required update on older
+firmware. No additional USB serial interface is required.
+
+The physical link is **115200 baud, 8N1, no flow control, 3.3 V logic**:
+
+| Direction | ESP32 | Host J5 | Display J5 | Display RP2354A |
+| --- | --- | --- | --- | --- |
+| Host TX → display RX (`DISP_TX`) | GPIO39 / UART0 TX | 5 | 8 | GPIO21 / UART1 RX |
+| Display TX → host RX (`DISP_RX`) | GPIO40 / UART0 RX | 4 | 9 | GPIO20 / UART1 TX |
+
+The pin names are host-relative, and the 12-pin FFC reverses connector numbering.
+The display must already run the matching v3 BAP firmware. The separate RP2040
+bridge loader is not a display programmer.
+
+### Using the BAP host
+
+Display operations use only the existing ESP32 control serial port:
+
+```bash
+./Anvil.py --display-probe
+./Anvil.py --display-set device_family BONANZA --display-set device_model BZM2
+./Anvil.py --display-set fan_rpm 4200 --display-set temperature_c 58.25
+./Anvil.py --display-serve --display-set power_w 17.60 --display-set fan_rpm 4200
+./Anvil.py --display-demo --display-seconds 60
+```
+
+`--display-probe` waits up to 15 seconds for a valid accessory `REQ` or `SUB`;
+`--display-seconds` overrides this wait. UART capabilities alone do not prove a
+display is attached. `--display-set` alone sends fields once. `--display-serve`
+and `--display-demo` continue until Ctrl-C unless bounded by `--display-seconds`.
+Serving responds to requests, acknowledges subscriptions, periodically publishes
+configured fields, and handles subscription renewal/expiry. Unconfigured metrics
+are omitted. The default identity is `BONANZA / BZM2`; demo telemetry is synthetic.
+Values configured in the menu persist for the current Anvil session only.
+
+Supported field names map to the display's response parameters:
+
+| Anvil field | BAP `RES` parameter | Meaning / limit |
+| --- | --- | --- |
+| `device_family` | `deviceModel` | Family, up to 31 ASCII characters |
+| `device_model` | `asicModel` | ASIC model (BZM2), up to 15 characters |
+| `ip_address` | `wifi_ip` | Host IPv4 text, up to 15 characters |
+| `best_share` | `best_difficulty` | Formatted best share, up to 31 characters |
+| `hashrate_ghs` | `hashrate` | GH/s |
+| `temperature_c` | `chipTemp` | Degrees C |
+| `power_w` | `power` | Watts |
+| `frequency_mhz` | `frequency` | MHz; optional unsolicited field supported by this display |
+| `fan_rpm` | `fan_speed` | RPM |
+
+Numeric values may contain decimals and are rounded by the display. Negative,
+non-finite and out-of-range values are rejected before transmission. Values use
+printable ASCII without `$`, `*`, CR or LF. Frames include XOR checksums and CRLF
+and stay within the accessory's 256-byte receive limit. `device_name` and
+`fan_percent` are not supported: the name row shows BAP connection status, and
+fan telemetry is RPM. Actual fan control remains in the Fan menu.
+
+BAP has **no display metric readback or acknowledgement for `RES`**. Anvil reports
+UART transmission, not verified screen rendering; the former `--display-read`
+option is removed. A one-shot value becomes stale after 30 seconds without host
+responses; keep a serving session open for continued updates. These controls do
+not automatically measure or stream mining telemetry. No I2C, ASIC power, reset,
+regulator, or fan-control commands are issued by display operations.
+
+### Display transport API
+
+Control page `0x0B` retains the normal length/ID framing:
+
+| Command | Request | Successful response |
+| --- | --- | --- |
+| `0x00` | Empty | Schema `1`, API `1`, baud LE32, TX GPIO `39`, RX GPIO `40`, max write LE16 (`256`) |
+| `0x20` | 1..256 raw UART bytes | Schema `1`, transmitted byte count LE16 |
+| `0x30` | Empty | Schema `1`, flags, 0..254 received UART bytes |
+
+RX flag bit 0 indicates dropped input (queue overflow, UART error, or a prior
+control disconnect); Anvil then discards any partial sentence and resynchronizes
+at the next `$`. The ESP32 drains UART RX into a bounded queue independently of
+USB commands. This is separate from the ASIC UART on GPIO17/18 and the SWD loader.
+
+Host tests cover BAP frames, requests/subscriptions, malformed input, units,
+transport capabilities, and overrun recovery. The following integration check
+compiles the display firmware's actual portable C client and exchanges frames
+with Anvil, including startup, decimal rounding, RPM, keepalive and renewal:
+
+```bash
+python3 tools/check_display_firmware.py ~/Bitcoin/ESP-Miner/bonanzaDisplay-fw
+```
+
+This check requires a C compiler. On 2026-11-04, ESP32 firmware 0.0.4 was flashed
+to 1004x unit #2 (USB serial `72dfdc12`, MAC `68:ee:8f:53:88:94`). Anvil verified
+the new identity and display UART capabilities, received `REQ,systemInfo` from
+the accessory, and ran a 20-second synthetic demo: 15 requests received and
+153 frames transmitted. Screen rendering has not been visually verified.
+Post-test status confirmed ASIC reset asserted, 5 V/TPS/PGOOD off, no trip,
+fan command full, PMBus OPERATION off, and zero domain taps.
 
 ## Powered PLL and genesis qualification
 

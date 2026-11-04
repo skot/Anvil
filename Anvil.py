@@ -3,10 +3,12 @@
 
 import argparse
 import glob
+import math
 import sys
 import time
 
 import bitaxeraw
+import bonanza_display
 import bridge_loader
 import bzm2
 import TPS546D24
@@ -34,6 +36,7 @@ class Anvil:
         self.tps_initialized = False
         self.bzm_chip_ids = []
         self.bzm_sequence = 0
+        self.display_values = dict(bonanza_display.IDENTITY)
         self.bzm_clocks_verified = False
         self.bzm_sensors_configured = False
 
@@ -55,6 +58,7 @@ class Anvil:
             print("  6) List serial ports")
             print("  7) Read domain/chip voltages")
             print("  8) RP2040 bridge firmware")
+            print("  9) BonanzaDisplay-v3")
             print("  q) Quit")
             choice = input("> ").strip().lower()
 
@@ -75,6 +79,8 @@ class Anvil:
                     self.read_domain_voltages()
                 elif choice == "8":
                     self.bridge_firmware_menu()
+                elif choice == "9":
+                    self.display_menu()
                 elif choice in ("q", "quit", "exit"):
                     self.shutdown()
                     return 0
@@ -664,6 +670,93 @@ class Anvil:
         finally:
             bzm2.stop_genesis_test(asic, self.bzm_chip_ids, self.debug)
 
+    def display_menu(self):
+        while True:
+            print("\nBonanzaDisplay-v3 (UART BAP)")
+            print("  1) Probe UART and observe display requests")
+            print("  2) Show configured host values")
+            print("  3) Send/configure a displayed field")
+            print("  4) Serve demo values (synthetic, not measured telemetry)")
+            print("  5) Serve configured values and handle subscriptions")
+            print("  b) Back")
+            choice = input("Display> ").strip().lower()
+            if choice in ("b", "back", "q"):
+                return
+            try:
+                if choice == "1":
+                    self.display_probe()
+                elif choice == "2":
+                    print("Configured host values; BAP has no display metric readback:")
+                    for name, value in self.display_values.items():
+                        print(f"{bonanza_display.FIELD_SPECS[name]['label']}: {value}")
+                elif choice == "3":
+                    fields = list(bonanza_display.FIELD_SPECS)
+                    for index, name in enumerate(fields, 1):
+                        print(f"  {index}) {bonanza_display.FIELD_SPECS[name]['label']} ({name})")
+                    selection = input("Field number (b to cancel): ").strip().lower()
+                    if selection == "b":
+                        continue
+                    if not selection.isdigit() or not 1 <= int(selection) <= len(fields):
+                        raise ValueError("Select a listed field number")
+                    name = fields[int(selection) - 1]
+                    value = input(f"{bonanza_display.FIELD_SPECS[name]['label']}: ")
+                    self.display_write({name: value})
+                elif choice == "4":
+                    self.display_demo()
+                elif choice == "5":
+                    self.display_serve()
+                else:
+                    print("Unknown option")
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(f"Display operation failed: {exc}")
+
+    def display_transport(self):
+        ctrl = self.require_control()
+        return bonanza_display.ControlUART(ctrl, self.debug) if ctrl else None
+
+    def display_probe(self, seconds=15):
+        transport = self.display_transport()
+        if transport is None:
+            return False
+        print("Display UART: 115200 8N1, ESP32 TX GPIO39 / RX GPIO40. Waiting for a BAP request...")
+        command, group, _ = bonanza_display.probe(transport, seconds)
+        print(f"Received display BAP {command},{group}; UART receive path observed.")
+        return True
+
+    def display_write(self, values):
+        # Validate the entire request before opening a port or transmitting.
+        frames = [bonanza_display.encode_field(name, value) for name, value in values.items()]
+        if not frames:
+            raise ValueError("Select at least one display field")
+        transport = self.display_transport()
+        if transport is None:
+            return False
+        for frame in frames:
+            transport.write(frame)
+        self.display_values.update(values)
+        print(f"Sent {len(frames)} BAP responses via UART. The display does not ACK telemetry.")
+        return True
+
+    def display_serve(self, values=None, seconds=0):
+        configured = dict(self.display_values)
+        configured.update(values or {})
+        for name, value in configured.items():
+            bonanza_display.encode_field(name, value)
+        transport = self.display_transport()
+        if transport is None:
+            return False
+        self.display_values = configured
+        print("Serving configured BAP fields and display subscriptions. Press Ctrl-C to stop.")
+        host = bonanza_display.serve(transport, configured, seconds)
+        print(f"BAP host stopped: {host.requests} requests received, {host.sent} frames transmitted.")
+        return True
+
+    def display_demo(self, seconds=0, overrides=None):
+        print("Serving synthetic demo values, not measured telemetry.")
+        values = {name: spec['default'] for name, spec in bonanza_display.FIELD_SPECS.items()}
+        values.update(overrides or {})
+        return self.display_serve(values, seconds)
+
     def bridge_firmware_menu(self):
         while True:
             print("\nRP2040 bridge firmware (ESP32 SWD)")
@@ -986,12 +1079,23 @@ def parse_args(argv):
     mode.add_argument("--probe", action="store_true", help="Read ESP32 board diagnostics and exit without enabling power")
     mode.add_argument("--bridge-probe", action="store_true", help="Probe the RP2040 over ESP32 SWD without flashing")
     mode.add_argument("--flash-bridge", metavar="FILE", help="Load an RP2040 .bin/.uf2 through ESP32 SWD and exit")
+    mode.add_argument("--display-probe", action="store_true", help="Observe a bonanzaDisplay BAP request over UART and exit")
+    mode.add_argument("--display-serve", action="store_true", help="Serve configured BAP values and display subscriptions")
+    mode.add_argument("--display-demo", action="store_true", help="Serve synthetic demo values to bonanzaDisplay over UART BAP")
+    parser.add_argument("--display-set", nargs=2, action="append", metavar=("FIELD", "VALUE"),
+                      help="Send a BAP field, or configure it with --display-serve; repeat for multiple fields")
     mode.add_argument("--bzm-io-test", choices=("noop", "assign"),
                       help="Test BZM2 UART with core VDD off and 5 V enabled only during the test")
+    parser.add_argument("--display-seconds", type=float, default=0,
+                        help="Bound display serving/probe duration; default: serve until Ctrl-C, probe for 15 seconds")
     parser.add_argument("--chips", type=int, choices=range(1, 5), default=4,
                         help="Expected chips for --bzm-io-test assign (default: 4)")
     parser.add_argument("--yes", action="store_true", help="Confirm the selected bridge flash or BZM2 I/O test without prompting")
     args = parser.parse_args(argv)
+    if not math.isfinite(args.display_seconds) or args.display_seconds < 0:
+        parser.error("--display-seconds must be a finite nonnegative number")
+    if args.display_set and (args.probe or args.bridge_probe or args.flash_bridge or args.bzm_io_test or args.display_probe):
+        parser.error("--display-set can only be used alone, with --display-serve or with --display-demo")
     if args.yes and not (args.flash_bridge or args.bzm_io_test):
         parser.error("--yes requires --flash-bridge FILE or --bzm-io-test")
     return args
@@ -1008,6 +1112,15 @@ def main(argv=None):
         debug=args.debug,
     )
     try:
+        if args.display_probe or args.display_serve or args.display_demo or args.display_set:
+            values = dict(args.display_set or [])
+            if args.display_probe:
+                return 0 if app.display_probe(args.display_seconds or 15) else 1
+            if args.display_demo:
+                return 0 if app.display_demo(args.display_seconds, values) else 1
+            if args.display_serve:
+                return 0 if app.display_serve(values, args.display_seconds) else 1
+            return 0 if app.display_write(values) else 1
         if args.bzm_io_test:
             if not app.connect_serial_ports():
                 return 1
